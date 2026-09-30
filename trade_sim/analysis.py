@@ -73,3 +73,29 @@ def filter_report(trades: pd.DataFrame, split=None, buckets: int = 3) -> pd.Data
     for period, df in (("train", train), ("test", test)):
         base.append({"feature": "(baseline)", "bucket": "all", "period": period, **summarize(df)})
     return pd.DataFrame(base + rows)
+
+
+def filter_digest(report: pd.DataFrame, metric: str = "avg_r", min_trades: int = 30) -> pd.DataFrame:
+    """One row per feature bucket: how much it beat the baseline in train and in test.
+
+    `holds` marks buckets that beat the baseline in both periods with at least
+    `min_trades` trades in each, the filters worth a closer look.
+    """
+    if report.empty:
+        return pd.DataFrame()
+    base = report[report["feature"] == "(baseline)"].set_index("period")[metric]
+    rows = report[report["feature"] != "(baseline)"]
+    wide = rows.pivot_table(index=["feature", "bucket"], columns="period", values=[metric, "trades"], aggfunc="first")
+    wide.columns = [f"{p}_{m}" for m, p in wide.columns]
+    wide = wide.reset_index()
+    for p in ("train", "test"):
+        if f"{p}_{metric}" not in wide:
+            wide[f"{p}_{metric}"] = np.nan
+            wide[f"{p}_trades"] = 0
+        wide[f"{p}_trades"] = wide[f"{p}_trades"].fillna(0).astype(int)
+        wide[f"{p}_vs_base"] = wide[f"{p}_{metric}"] - base.get(p, np.nan)
+    wide["holds"] = ((wide["train_vs_base"] > 0) & (wide["test_vs_base"] > 0) &
+                     (wide["train_trades"] >= min_trades) & (wide["test_trades"] >= min_trades))
+    cols = ["feature", "bucket", "train_trades", f"train_{metric}", "train_vs_base",
+            "test_trades", f"test_{metric}", "test_vs_base", "holds"]
+    return wide[cols].sort_values(["holds", "test_vs_base"], ascending=False).reset_index(drop=True)

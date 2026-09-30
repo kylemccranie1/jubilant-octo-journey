@@ -144,3 +144,30 @@ def test_participation_cap_partial_fill():
     assert f[0].qty == 100                       # 10% of 1000 shares
     f2 = b.process_bar("XYZ", bar("10:02", 100, 100, 100, 100, v=1000))
     assert f2[0].qty == 100
+
+
+def test_buy_to_cover_needs_no_buying_power():
+    # A short that uses nearly all buying power must still be coverable by stop, limit and market orders.
+    b = make(cash=10_000, kind=AccountType.MARGIN)
+    b.submit(Order("XYZ", Side.SELL, OrderType.MARKET, qty=190), ts("10:00"))
+    b.process_bar("XYZ", bar("10:01", 100, 100.2, 99.9, 100.1))
+    assert b.account.position("XYZ").qty == -190
+    assert b.account.buying_power() < 190 * 100
+    stop = b.submit(Order("XYZ", Side.BUY, OrderType.STOP, qty=190, stop_price=101, tif=TimeInForce.GTC,
+                          oco_group="x"), ts("10:02"))
+    target = b.submit(Order("XYZ", Side.BUY, OrderType.LIMIT, qty=190, limit_price=98, tif=TimeInForce.GTC,
+                            oco_group="x"), ts("10:02"))
+    assert stop.status == Status.OPEN and target.status == Status.OPEN
+    assert stop.reserved == 0 and target.reserved == 0
+    fills = b.process_bar("XYZ", bar("10:03", 100.5, 101.5, 100.4, 101.2))
+    assert len(fills) == 1 and fills[0].order_id == stop.id
+    assert b.account.position("XYZ").qty == 0
+    assert target.status == Status.CANCELED
+
+
+def test_buy_that_flips_short_to_long_reserves_only_the_long_part():
+    b = make(cash=10_000, kind=AccountType.MARGIN)
+    b.submit(Order("XYZ", Side.SELL, OrderType.MARKET, qty=10), ts("10:00"))
+    b.process_bar("XYZ", bar("10:01", 100, 100.2, 99.9, 100.0))
+    o = b.submit(Order("XYZ", Side.BUY, OrderType.LIMIT, qty=30, limit_price=100), ts("10:02"))
+    assert o.reserved == pytest.approx(20 * 100)
