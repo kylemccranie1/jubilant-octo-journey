@@ -56,6 +56,20 @@ python run_backtest.py --symbol SPY --start 2023-01-01 --end 2026-09-01 \
 
 Results go to `results/` (trade journal CSV and filter report CSV).
 
+To run every symbol × strategy × mode and pool the trades across symbols (a single
+symbol rarely has enough trades for its 30% test slice to mean much):
+
+```bash
+python run_grid.py --symbols SPY QQQ AAPL MSFT NVDA AMZN --start 2021-01-01 --end 2026-09-29 --regular-only
+python run_grid.py --synthetic --symbols A B C --regular-only   # smoke test, no keys
+```
+
+It writes per-run trade journals, `summary.csv`, `pooled_summary.csv`, and for each
+strategy/mode a pooled filter report plus a digest where `holds` marks feature buckets
+that beat the baseline's average R in both train and test. The summary's
+`unexplained_pnl` column should stay within a few dollars of borrow fees; anything larger
+means a position was left open or the ledger is off.
+
 ## Layout
 
 ```
