@@ -32,7 +32,8 @@ def _bars(symbol, a):
 def _job(symbol, strategy, mode, a):
     df = _bars(symbol, a)
     trades, stats = run_level_backtest(df, symbol, strategy, mode, a.account, a.cash, a.stop_atr,
-                                       a.target_atr, a.hold_days, a.regular_only)
+                                       a.target_atr, a.hold_days, a.regular_only,
+                                       trade_start=a.trade_start)
     return symbol, strategy, mode, trades, stats
 
 
@@ -41,6 +42,8 @@ def main():
     ap.add_argument("--symbols", nargs="+", default=["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "AMZN"])
     ap.add_argument("--start", default="2021-01-01")
     ap.add_argument("--end", default="2026-09-29")
+    ap.add_argument("--trade-start", default=None,
+                    help="bars before this date only warm up indicators; trading starts here")
     ap.add_argument("--synthetic", action="store_true", help="random-walk data, no API keys (no edge)")
     ap.add_argument("--feed", choices=["sip", "iex"], default="sip")
     ap.add_argument("--strategies", nargs="+", choices=list(STRATEGIES), default=list(STRATEGIES))

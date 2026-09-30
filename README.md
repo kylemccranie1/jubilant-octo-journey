@@ -60,7 +60,9 @@ To run every symbol × strategy × mode and pool the trades across symbols (a si
 symbol rarely has enough trades for its 30% test slice to mean much):
 
 ```bash
-python run_grid.py --symbols SPY QQQ AAPL MSFT NVDA AMZN --start 2021-01-01 --end 2026-09-29 --regular-only
+# Last year only; bars from --start to --trade-start just warm up ATR, percentiles and zones
+python run_grid.py --symbols SPY QQQ AAPL MSFT NVDA AMZN --start 2025-06-02 --trade-start 2025-09-29 \
+    --end 2026-09-29 --regular-only
 python run_grid.py --synthetic --symbols A B C --regular-only   # smoke test, no keys
 ```
 

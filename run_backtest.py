@@ -28,6 +28,8 @@ def main():
     ap.add_argument("--symbol", default="SYN")
     ap.add_argument("--start", default="2024-01-01")
     ap.add_argument("--end", default="2025-06-30")
+    ap.add_argument("--trade-start", default=None,
+                    help="bars before this date only warm up indicators; trading starts here")
     ap.add_argument("--synthetic", action="store_true")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--feed", choices=["sip", "iex"], default="sip",
@@ -46,7 +48,8 @@ def main():
     cal = TradingCalendar()
     df = get_data(args, cal)
     trades, stats = run_level_backtest(df, args.symbol, args.strategy, args.mode, args.account, args.cash,
-                                       args.stop_atr, args.target_atr, args.hold_days, args.regular_only, cal)
+                                       args.stop_atr, args.target_atr, args.hold_days, args.regular_only, cal,
+                                       trade_start=args.trade_start)
     print("\n== Summary ==")
     for k, v in stats.items():
         print(f"{k:>18}: {v}")
