@@ -30,17 +30,19 @@ def load_bars(symbol: str, start: str, end: str, feed: str = "sip", cache_dir: s
 def run_level_backtest(df: pd.DataFrame, symbol: str, strategy: str = "daily_weekly", mode: str = "vol_gated",
                        account: str = "margin", cash: float = 25_000, stop_atr: float = 0.5,
                        target_atr: float = 1.0, hold_days: int = 0, regular_only: bool = False,
-                       cal: TradingCalendar | None = None, trade_start: str | None = None) -> tuple[pd.DataFrame, dict]:
+                       cal: TradingCalendar | None = None, trade_start: str | None = None,
+                       **param_overrides) -> tuple[pd.DataFrame, dict]:
     """Returns (trade journal, summary stats) for one symbol/strategy/mode.
 
     trade_start: bars before this date only warm up indicators (ATR, percentiles, zones);
     the simulation, trades and equity curve start here.
+    param_overrides: any other LevelParams field (e.g. exit settings).
     """
     cal = cal or TradingCalendar()
     acct_type = AccountType(account)
     params = LevelParams(mode=mode, allow_short=acct_type == AccountType.MARGIN,
                          stop_atr=stop_atr, target_atr=target_atr,
-                         exit_eod=hold_days == 0, max_hold_days=max(hold_days, 1))
+                         exit_eod=hold_days == 0, max_hold_days=max(hold_days, 1), **param_overrides)
     strat = STRATEGIES[strategy](symbol, params)
     broker = PaperBroker(Account(acct_type, cash=cash), cal)
     ctx = Backtester(broker, strat, {symbol: df}, regular_hours_only=regular_only).run(start=trade_start)

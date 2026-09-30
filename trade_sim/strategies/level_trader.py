@@ -43,8 +43,11 @@ class LevelParams:
     vol_threshold_pct: float = 50.0     # ATR percentile at or above which volatility counts as "high"
     allow_short: bool = True            # needs a margin account with $2,000+
     stop_atr: float = 0.5               # stop distance beyond the level, in daily ATRs
-    target_atr: float = 1.0             # profit target distance from entry, in daily ATRs
+    target_atr: float = 1.0             # profit target distance from entry, in daily ATRs; 0 = no target
     break_buffer_atr: float = 0.05      # break entries trigger this far beyond the level
+    trail_atr: float = 0.0              # >0: also a trailing stop this many ATRs behind the best price
+    breakeven_atr: float = 0.0          # >0: move the stop to the entry price once this far in profit
+    time_stop_min: int = 0              # >0: exit at market after this many minutes in the trade
     exit_eod: bool = True
     max_hold_days: int = 5              # used when exit_eod is False
     risk_per_trade: float = 0.01        # fraction of equity lost if the stop is hit
@@ -67,6 +70,9 @@ class LevelTrader(Strategy):
         self.stop_price = None
         self.target_price = None
         self.entry_day = None
+        self.entry_ts = None
+        self.entry_price = None
+        self.breakeven_done = False
         self.pending_entry_level: dict[int, Level] = {}
 
     # --- hooks for subclasses -------------------------------------------
@@ -151,10 +157,32 @@ class LevelTrader(Strategy):
         held_days = (day - self.entry_day).days if self.entry_day else 0
         time_exit = (self.p.exit_eod and t >= self.p.flatten_at) or \
                     (not self.p.exit_eod and held_days >= self.p.max_hold_days and t >= self.p.flatten_at)
-        if time_exit and not any(o.tag == "time_exit" for o in broker.open_orders(self.symbol)):
-            broker.cancel_all(self.symbol)
-            side = Side.SELL if pos > 0 else Side.BUY
-            broker.submit(Order(self.symbol, side, OrderType.MARKET, qty=abs(pos), tag="time_exit"), bar.ts)
+        tag = "time_exit"
+        if not time_exit and self.p.time_stop_min > 0 and self.entry_ts is not None \
+                and bar.ts - self.entry_ts >= pd.Timedelta(minutes=self.p.time_stop_min):
+            time_exit, tag = True, "time_stop"
+        if time_exit:
+            if not any(o.tag in ("time_exit", "time_stop") for o in broker.open_orders(self.symbol)):
+                broker.cancel_all(self.symbol)
+                side = Side.SELL if pos > 0 else Side.BUY
+                broker.submit(Order(self.symbol, side, OrderType.MARKET, qty=abs(pos), tag=tag), bar.ts)
+            return
+        if self.p.breakeven_atr > 0 and not self.breakeven_done:
+            best = bar.high - self.entry_price if pos > 0 else self.entry_price - bar.low
+            if best >= self.p.breakeven_atr * self.atr:
+                self._move_stop(ctx, bar.ts, pos, self.entry_price)
+                self.breakeven_done = True
+
+    def _move_stop(self, ctx, ts, pos, price):
+        """Replace the fixed stop (tag "stop") with one at `price`, keeping the same OCO group."""
+        broker = ctx.broker
+        for o in broker.open_orders(self.symbol):
+            if o.tag == "stop" and o.oco_group == self.exit_group:
+                broker.cancel(o.id, "stop moved")
+        self.stop_price = price
+        side = Side.SELL if pos > 0 else Side.BUY
+        broker.submit(Order(self.symbol, side, OrderType.STOP, qty=abs(pos), stop_price=price,
+                            tif=TimeInForce.GTC, tag="stop", oco_group=self.exit_group), ts)
 
     def _place_entries(self, ctx, bar):
         mode = self._mode_today()
@@ -217,6 +245,7 @@ class LevelTrader(Strategy):
                     broker.cancel(o.id, "another entry filled")
             if fill.order_id in self.pending_entry_level and self.exit_group is None:
                 self.entry_day = fill.ts.tz_convert(ET).date()
+                self.entry_ts, self.entry_price, self.breakeven_done = fill.ts, fill.price, False
                 direction = 1 if pos > 0 else -1
                 self.stop_price = stop
                 self.target_price = fill.price + direction * self.p.target_atr * self.atr
@@ -236,8 +265,14 @@ class LevelTrader(Strategy):
             exit_side = Side.SELL if pos > 0 else Side.BUY
             broker.submit(Order(self.symbol, exit_side, OrderType.STOP, qty=abs(pos), stop_price=self.stop_price,
                                 tif=TimeInForce.GTC, tag="stop", oco_group=self.exit_group), fill.ts)
-            broker.submit(Order(self.symbol, exit_side, OrderType.LIMIT, qty=abs(pos), limit_price=self.target_price,
-                                tif=TimeInForce.GTC, tag="target", oco_group=self.exit_group), fill.ts)
+            if self.p.target_atr > 0:
+                broker.submit(Order(self.symbol, exit_side, OrderType.LIMIT, qty=abs(pos),
+                                    limit_price=self.target_price, tif=TimeInForce.GTC, tag="target",
+                                    oco_group=self.exit_group), fill.ts)
+            if self.p.trail_atr > 0:
+                broker.submit(Order(self.symbol, exit_side, OrderType.TRAILING_STOP, qty=abs(pos),
+                                    trail_amount=self.p.trail_atr * self.atr, trail_ref=fill.price,
+                                    tif=TimeInForce.GTC, tag="trail", oco_group=self.exit_group), fill.ts)
 
 
 # ----------------------------------------------------------------------

@@ -72,6 +72,19 @@ that beat the baseline's average R in both train and test. The summary's
 `unexplained_pnl` column should stay within a few dollars of borrow fees; anything larger
 means a position was left open or the ledger is off.
 
+To compare exits on the same entries (ranked on the first ~70% of the year, judged on the rest):
+
+```bash
+python run_exits.py --stops 0.15 0.25 0.5 1.0 --targets 0.25 0.5 1 0     # 0 = no target
+python run_exits.py --configs '[{"stop_atr": 0.5, "target_atr": 0, "trail_atr": 0.5},
+                                {"stop_atr": 0.5, "target_atr": 1, "breakeven_atr": 0.3},
+                                {"stop_atr": 0.5, "target_atr": 1, "time_stop_min": 60}]'
+```
+
+Exit settings (all in daily ATRs): `stop_atr`, `target_atr` (0 = none), `trail_atr` (trailing
+stop alongside the fixed stop), `breakeven_atr` (move the stop to entry once this far ahead),
+`time_stop_min` (exit after N minutes), `hold_days` (0 = flatten at 15:55).
+
 ## Layout
 
 ```

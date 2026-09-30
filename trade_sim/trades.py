@@ -101,7 +101,7 @@ class TradeTracker:
             r = {"symbol": t.symbol, "direction": t.direction, "entry_ts": t.entry_ts, "exit_ts": t.exit_ts,
                  "entry_price": t.entry_price, "exit_price": t.exit_price, "qty": t.qty, "fees": t.fees,
                  "net_pnl": t.net_pnl, "return_pct": t.return_pct, "r_multiple": t.r_multiple,
-                 "mae": t.mae, "mfe": t.mfe, "entry_tag": t.entry_tag, "exit_tag": t.exit_tag}
+                 "risk_per_share": t.risk_per_share, "mae": t.mae, "mfe": t.mfe, "entry_tag": t.entry_tag, "exit_tag": t.exit_tag}
             r.update({f"f_{k}": v for k, v in t.features.items()})
             rows.append(r)
         return pd.DataFrame(rows)
