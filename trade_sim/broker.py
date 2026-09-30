@@ -150,10 +150,13 @@ class PaperBroker:
         return o.limit_price or o.stop_price or self.account.marks.get(o.symbol) or 0.0
 
     def _reserve_needed(self, o: Order) -> float:
-        """Buying power to hold for buys and for sells that open a short."""
+        """Buying power to hold for buys and for sells that open a short. The part of a buy
+        that covers an existing short reduces risk, so it needs none."""
         price = self._est_price(o)
         if o.side == Side.BUY:
+            cover = max(-self.account.position(o.symbol).qty, 0.0) * price
             amt = o.notional if o.notional is not None else (o.qty or 0) * price
+            amt = max(amt - cover, 0.0)
         else:
             pos = max(self.account.position(o.symbol).qty, 0.0)
             short_qty = max((o.qty or 0) - pos, 0.0)
@@ -282,8 +285,8 @@ class PaperBroker:
 
         q, price = res.qty, res.price
         # Buying power check at fill time for entries (price may have gapped).
-        if o.side == Side.BUY or q > max(pos, 0):
-            opening_value = q * price if o.side == Side.BUY else (q - max(pos, 0)) * price
+        if (o.side == Side.BUY and q > max(-pos, 0)) or (o.side == Side.SELL and q > max(pos, 0)):
+            opening_value = (q - max(-pos, 0)) * price if o.side == Side.BUY else (q - max(pos, 0)) * price
             available = self.account.buying_power() + o.reserved
             if opening_value > available + 1e-6:
                 self.cancel(o.id, "insufficient buying power at fill")

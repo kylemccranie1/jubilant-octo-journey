@@ -2,7 +2,7 @@
 
 A paper trading simulator that copies how Robinhood handles stock orders, plus a
 research harness for level-based strategies. It never connects to a brokerage and
-never places real orders. Market data comes from Alpaca's data API (free IEX feed).
+never places real orders. Market data comes from Alpaca's data API (consolidated SIP feed, free for history).
 
 ## What it models
 
@@ -48,7 +48,8 @@ python -m pytest
 # Synthetic data (no API keys needed; it has no edge, so results should hover around zero)
 python run_backtest.py --synthetic --strategy daily_weekly --mode vol_gated --regular-only
 
-# Real data (needs ALPACA_API_KEY and ALPACA_SECRET_KEY)
+# Real data (needs ALPACA_API_KEY and ALPACA_SECRET_KEY; uses the SIP feed by default,
+# which the free plan allows for anything older than 15 minutes)
 python run_backtest.py --symbol SPY --start 2023-01-01 --end 2026-09-01 \
     --strategy sr_zones --mode fade --account margin --stop-atr 0.5 --target-atr 1.0
 ```

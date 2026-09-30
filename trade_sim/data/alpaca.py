@@ -1,4 +1,6 @@
-"""Alpaca market data (free Basic plan = IEX feed; paid plan = SIP).
+"""Alpaca market data. The free Basic plan gets the IEX feed in full and the consolidated SIP
+feed for anything older than 15 minutes; SIP is the better choice for backtests because
+IEX carries only a few percent of volume and misses many highs and lows.
 
 Needs ALPACA_API_KEY and ALPACA_SECRET_KEY in the environment. Only the market data API
 is used; this module never talks to a brokerage or places orders.
@@ -19,11 +21,23 @@ from .store import label_sessions
 BASE = "https://data.alpaca.markets/v2/stocks"
 
 
+def _clamp_recent(end: str) -> str:
+    """The free plan rejects SIP requests that reach into the last 15 minutes. A bare date
+    counts as the whole day, so an end date of today (or later) is refused outright."""
+    limit = pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=16)
+    ts = pd.Timestamp(end)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize(ET) + pd.Timedelta(days=1) if len(end) <= 10 else ts.tz_localize("UTC")
+    return limit.strftime("%Y-%m-%dT%H:%M:%SZ") if ts > limit else end
+
+
 def fetch_bars(symbol: str, start: str, end: str, timeframe: str = "1Min", feed: str = "iex",
                adjustment: str = "split") -> pd.DataFrame:
     key, secret = os.environ.get("ALPACA_API_KEY"), os.environ.get("ALPACA_SECRET_KEY")
     if not key or not secret:
         raise RuntimeError("Set ALPACA_API_KEY and ALPACA_SECRET_KEY to download market data.")
+    if feed == "sip":
+        end = _clamp_recent(end)
     params = {"symbols": symbol, "timeframe": timeframe, "start": start, "end": end,
               "feed": feed, "adjustment": adjustment, "limit": 10000}
     rows, token = [], None

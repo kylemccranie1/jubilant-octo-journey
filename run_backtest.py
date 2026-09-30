@@ -23,7 +23,7 @@ from trade_sim.strategies.level_trader import DailyWeeklyLevels, LevelParams, Su
 def get_data(args, cal) -> pd.DataFrame:
     if args.synthetic:
         return synthetic_minute_bars(args.start, args.end, seed=args.seed, extended=not args.regular_only, cal=cal)
-    cache = Path("data_cache") / f"{args.symbol}_{args.start}_{args.end}.csv"
+    cache = Path("data_cache") / f"{args.symbol}_{args.start}_{args.end}_{args.feed}.csv"
     if cache.exists():
         return load_csv(cache)
     from trade_sim.data.alpaca import fetch_bars
@@ -39,7 +39,8 @@ def main():
     ap.add_argument("--end", default="2025-06-30")
     ap.add_argument("--synthetic", action="store_true")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--feed", default="iex")
+    ap.add_argument("--feed", choices=["sip", "iex"], default="sip",
+                    help="sip = all exchanges (free if older than 15 min); iex = one exchange's trades")
     ap.add_argument("--strategy", choices=["daily_weekly", "sr_zones"], default="daily_weekly")
     ap.add_argument("--mode", choices=["vol_gated", "fade", "break"], default="vol_gated")
     ap.add_argument("--account", choices=["cash", "margin"], default="margin")

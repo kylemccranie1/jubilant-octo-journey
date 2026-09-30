@@ -120,6 +120,32 @@ def test_margin_short_needs_2000():
     assert gtc_short.status == Status.REJECTED     # opening shorts are good-for-day only
 
 
+def test_buy_to_cover_needs_no_buying_power():
+    # A short that used up buying power must still be closable by its stop, its target
+    # and a market order: covering reduces risk, so no buying power is reserved for it.
+    b = make(cash=5_000, kind=AccountType.MARGIN)
+    b.submit(Order("XYZ", Side.SELL, OrderType.MARKET, qty=90), ts("10:00"))
+    b.process_bar("XYZ", bar("10:01", 100, 100, 100, 100))
+    assert b.account.position("XYZ").qty == -90
+    assert b.account.buying_power() < 90 * 110
+    stop = b.submit(Order("XYZ", Side.BUY, OrderType.STOP, qty=90, stop_price=110,
+                          tif=TimeInForce.GTC, oco_group="x"), ts("10:02"))
+    target = b.submit(Order("XYZ", Side.BUY, OrderType.LIMIT, qty=90, limit_price=95,
+                            tif=TimeInForce.GTC, oco_group="x"), ts("10:02"))
+    assert stop.status == Status.OPEN and target.status == Status.OPEN
+    b.process_bar("XYZ", bar("10:03", 100, 111, 100, 111))
+    assert stop.status == Status.FILLED and target.status == Status.CANCELED
+    assert b.account.position("XYZ").qty == 0
+
+
+def test_buy_that_flips_short_to_long_reserves_only_the_long_part():
+    b = make(cash=5_000, kind=AccountType.MARGIN)
+    b.submit(Order("XYZ", Side.SELL, OrderType.MARKET, qty=10), ts("10:00"))
+    b.process_bar("XYZ", bar("10:01", 100, 100, 100, 100))
+    o = b.submit(Order("XYZ", Side.BUY, OrderType.LIMIT, qty=15, limit_price=100), ts("10:02"))
+    assert o.reserved == pytest.approx(5 * 100)
+
+
 def test_dollar_sell_limited_to_95_percent():
     b = make()
     b.submit(Order("XYZ", Side.BUY, OrderType.MARKET, qty=10), ts("10:00"))
