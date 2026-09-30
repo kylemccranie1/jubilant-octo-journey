@@ -45,7 +45,12 @@ def run_level_backtest(df: pd.DataFrame, symbol: str, strategy: str = "daily_wee
     broker = PaperBroker(Account(acct_type, cash=cash), cal)
     ctx = Backtester(broker, strat, {symbol: df}, regular_hours_only=regular_only).run(start=trade_start)
     trades = ctx.tracker.to_frame()
-    stats = {**summarize(trades), **equity_stats(ctx.equity_curve)}
+    # The engine records equity at each day's close; prepend the starting balance so the
+    # first day's P&L counts toward returns.
+    curve = ctx.equity_curve
+    if curve:
+        curve = [(curve[0][0] - pd.Timedelta(days=1), cash)] + curve
+    stats = {**summarize(trades), **equity_stats(curve)}
     # Sanity check: equity change not explained by closed trades (open positions, interest, borrow fees).
     # Anything beyond a few dollars of fees means a position got stuck or the ledger is off.
     if "end_equity" in stats:

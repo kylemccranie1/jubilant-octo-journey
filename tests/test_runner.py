@@ -12,3 +12,5 @@ def test_trade_start_uses_earlier_bars_only_for_warmup():
     # ~84 trading days of warm-up covers ATR (14) plus the percentile minimum (63), so features are ready.
     assert trades["f_atr_pct"].notna().all()
     assert stats["open_at_end"] == 0
+    assert stats["start_equity"] == 25_000
+    assert abs(stats["unexplained_pnl"]) < 5  # only borrow fees are outside the trade journal
