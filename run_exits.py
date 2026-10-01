@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from trade_sim import levels as lv
 from trade_sim.analysis import summarize
 from trade_sim.runner import STRATEGIES, load_bars, run_level_backtest
 
@@ -33,6 +34,10 @@ ARGS = None
 @lru_cache(maxsize=None)
 def _bars(symbol):  # one CSV read per symbol per worker process
     return load_bars(symbol, ARGS.start, ARGS.end, feed=ARGS.feed)
+
+
+def _bars_main(symbol, a):
+    return load_bars(symbol, a.start, a.end, feed=a.feed)
 
 
 def _init(args):
@@ -45,6 +50,8 @@ def _label(cfg: dict) -> str:
     for k, v in cfg.items():
         if k == "target_atr" and v == 0:
             v = "none"
+        if k == "hold_days":
+            k, v = "hold", {0: "eod", -1: "none"}.get(v, f"{v}d")
         parts.append(f"{k.replace('_atr', '')}={v}")
     return " ".join(parts)
 
@@ -55,7 +62,8 @@ def _job(symbol, strategy, mode, cfg):
     kw = dict(stop_atr=cfg.pop("stop_atr", 0.5), target_atr=cfg.pop("target_atr", 1.0),
               hold_days=cfg.pop("hold_days", 0))
     trades, stats = run_level_backtest(_bars(symbol), symbol, strategy, mode, a.account, a.cash,
-                                       regular_only=True, trade_start=a.trade_start, **kw, **cfg)
+                                       regular_only=True, trade_start=a.trade_start, **kw,
+                                       **({"levels": tuple(a.levels)} if a.levels else {}), **cfg)
     return trades, stats
 
 
@@ -72,6 +80,9 @@ def pooled_stats(trades: pd.DataFrame, split: pd.Timestamp) -> dict:
             "pct_stop": round(100 * exits.get("stop", 0), 1), "pct_target": round(100 * exits.get("target", 0), 1),
             "pct_trail": round(100 * exits.get("trail", 0), 1),
             "pct_time": round(100 * (exits.get("time_exit", 0) + exits.get("time_stop", 0)), 1),
+            "pct_end": round(100 * exits.get("end_of_data", 0), 1),
+            "long_pnl": round(trades.loc[trades["direction"] > 0, "net_pnl"].sum(), 0),
+            "short_pnl": round(trades.loc[trades["direction"] < 0, "net_pnl"].sum(), 0),
             "median_hold_min": round(hold_min.median(), 0)}
 
 
@@ -89,7 +100,10 @@ def main():
     ap.add_argument("--stops", nargs="+", type=float, default=[0.25, 0.5, 1.0])
     ap.add_argument("--targets", nargs="+", type=float, default=[0.5, 1.0, 2.0, 3.0, 0.0],
                     help="0 = no target (exit at the stop or the time exit)")
-    ap.add_argument("--holds", nargs="+", type=int, default=[0], help="0 = flatten daily at 15:55")
+    ap.add_argument("--holds", nargs="+", type=int, default=[0],
+                    help="0 = flatten daily at 15:55; N = flatten after N trading days; -1 = no time limit")
+    ap.add_argument("--levels", nargs="+", default=None, choices=["pdh", "pdl", "pwh", "pwl"],
+                    help="daily_weekly only: which levels to trade (default all four)")
     ap.add_argument("--configs", default=None, help="JSON list of dicts; replaces the stops x targets x holds grid")
     ap.add_argument("--split", default="2026-06-08", help="train/test split date for all configs")
     ap.add_argument("--workers", type=int, default=4)
@@ -139,7 +153,8 @@ def main():
     res.to_csv(out / "exits_summary.csv", index=False)
 
     cols = ["config", "trades", "win_rate", "profit_factor", "net_pnl", "train_pnl", "test_pnl",
-            "symbols_positive", "pct_stop", "pct_target", "pct_trail", "pct_time", "median_hold_min"]
+            "symbols_positive", "long_pnl", "short_pnl", "pct_stop", "pct_target", "pct_trail", "pct_time",
+            "pct_end", "median_hold_min"]
     with pd.option_context("display.width", 220, "display.max_rows", 200):
         for (st, m), g in res.groupby(["strategy", "mode"], sort=False):
             g = g.sort_values("train_pnl", ascending=False)
@@ -147,6 +162,12 @@ def main():
             print(f"\n== {st} / {m}: exits ranked by train P&L (split {split.date()}); "
                   f"train/test rank correlation {rho:.2f} ==")
             print(g[cols].to_string(index=False))
+    bh = []
+    for sym in a.symbols:
+        d = lv.daily_bars(_bars_main(sym, a))
+        d = d[d.index >= pd.Timestamp(a.trade_start).date()] if a.trade_start else d
+        bh.append(f"{sym} {100 * (d['close'].iloc[-1] / d['close'].iloc[0] - 1):+.1f}%")
+    print("\nBuy and hold over the same window: " + ", ".join(bh))
     print(f"\nNet P&L is summed over {len(a.symbols)} symbols, each a ${a.cash:,.0f} account risking 1% per trade.")
     print(f"Written to {out}/")
 

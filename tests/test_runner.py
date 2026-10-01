@@ -43,3 +43,51 @@ def test_trailing_and_time_stops_fire_and_reconcile():
     assert (trades["exit_tag"] == "time_stop").any()
     assert held[trades["exit_tag"] == "time_stop"].between(30, 32).all()
     assert stats["open_at_end"] == 0
+
+
+def test_multi_day_hold_counts_trading_days():
+    from trade_sim.calendar import TradingCalendar
+    cal = TradingCalendar(2023, 2025)
+    trades, stats = run_level_backtest(_synthetic(), "X", "daily_weekly", "break", regular_only=True,
+                                       trade_start="2024-05-01", stop_atr=2.0, target_atr=0, hold_days=2,
+                                       levels=("pdh", "pdl"))
+    timed = trades[trades["exit_tag"] == "time_exit"]
+    assert not timed.empty
+    for _, t in timed.iterrows():
+        entry, exit_ = t["entry_ts"].date(), t["exit_ts"].date()
+        assert len(cal.trading_days(entry, exit_)) - 1 == 2   # flattened on the 2nd trading day after entry
+        assert t["exit_ts"].hour == 15 and t["exit_ts"].minute >= 55
+    assert set(trades["entry_tag"]) <= {"break:pdh", "break:pdl"}
+
+
+def test_unlimited_hold_closes_at_end_of_data():
+    trades, stats = run_level_backtest(_synthetic(), "X", "daily_weekly", "break", regular_only=True,
+                                       trade_start="2024-05-01", stop_atr=3.0, target_atr=0, hold_days=-1)
+    assert "time_exit" not in set(trades["exit_tag"])
+    assert stats["open_at_end"] == 0 and abs(stats["unexplained_pnl"]) < 5
+
+
+def test_expired_gtc_exits_are_replaced(monkeypatch):
+    import trade_sim.broker as broker_mod
+    monkeypatch.setattr(broker_mod, "GTC_MAX_DAYS", 1)   # exits expire after one day
+    trades, stats = run_level_backtest(_synthetic(), "X", "daily_weekly", "break", regular_only=True,
+                                       trade_start="2024-05-01", stop_atr=1.0, target_atr=2.0, hold_days=-1)
+    held = (trades["exit_ts"] - trades["entry_ts"]).dt.days
+    # Trades outlive the 1-day expiry and still leave through a stop or target, not only end of data.
+    long_lived = trades[held >= 2]
+    assert not long_lived.empty
+    assert long_lived["exit_tag"].isin(["stop", "target"]).any()
+    assert stats["open_at_end"] == 0
+
+
+def test_placebo_levels_keep_distance_distribution_but_move_levels():
+    df = _synthetic()
+    kw = dict(regular_only=True, trade_start="2024-05-01", levels=("pdh", "pdl"))
+    real, _ = run_level_backtest(df, "X", "daily_weekly", "break", **kw)
+    fake, stats = run_level_backtest(df, "X", "placebo_daily_weekly", "break", placebo_seed=1, **kw)
+    fake2, _ = run_level_backtest(df, "X", "placebo_daily_weekly", "break", placebo_seed=2, **kw)
+    assert not fake.empty and stats["open_at_end"] == 0
+    assert not real["entry_price"].round(2).equals(fake["entry_price"].round(2))
+    assert not fake["entry_ts"].equals(fake2["entry_ts"])        # seeds give different placebos
+    # Same order mechanics: entries still trigger as breaks of a pdh/pdl-labelled level.
+    assert set(fake["entry_tag"]) <= {"break:pdh", "break:pdl"}

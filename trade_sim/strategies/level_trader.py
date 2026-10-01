@@ -49,7 +49,9 @@ class LevelParams:
     breakeven_atr: float = 0.0          # >0: move the stop to the entry price once this far in profit
     time_stop_min: int = 0              # >0: exit at market after this many minutes in the trade
     exit_eod: bool = True
-    max_hold_days: int = 5              # used when exit_eod is False
+    max_hold_days: int = 5              # trading days, used when exit_eod is False; 0 = no time limit
+    levels: tuple = ("pdh", "pdl", "pwh", "pwl")  # DailyWeeklyLevels: which levels to trade
+    placebo_seed: int = 0               # PlaceboDailyWeekly: random seed
     risk_per_trade: float = 0.01        # fraction of equity lost if the stop is hit
     max_position_frac: float = 0.5      # cap on position value as a fraction of buying power
     entry_start: time = time(9, 35)
@@ -73,6 +75,7 @@ class LevelTrader(Strategy):
         self.entry_ts = None
         self.entry_price = None
         self.breakeven_done = False
+        self.days_held = 0
         self.pending_entry_level: dict[int, Level] = {}
 
     # --- hooks for subclasses -------------------------------------------
@@ -101,6 +104,8 @@ class LevelTrader(Strategy):
         self._day_vol = 0.0
         self._levels_ready = False
         self._today = day
+        if ctx.account.position(self.symbol).qty != 0:
+            self.days_held += 1  # trading days, since this only runs on days with bars
 
     def _prepare_levels(self, ctx: Context, open_price: float) -> None:
         day = self._today
@@ -153,10 +158,9 @@ class LevelTrader(Strategy):
 
     def _manage_open(self, ctx, bar, t, pos):
         broker = ctx.broker
-        day = bar.ts.tz_convert(ET).date()
-        held_days = (day - self.entry_day).days if self.entry_day else 0
         time_exit = (self.p.exit_eod and t >= self.p.flatten_at) or \
-                    (not self.p.exit_eod and held_days >= self.p.max_hold_days and t >= self.p.flatten_at)
+                    (not self.p.exit_eod and self.p.max_hold_days > 0 and self.days_held >= self.p.max_hold_days
+                     and t >= self.p.flatten_at)
         tag = "time_exit"
         if not time_exit and self.p.time_stop_min > 0 and self.entry_ts is not None \
                 and bar.ts - self.entry_ts >= pd.Timedelta(minutes=self.p.time_stop_min):
@@ -167,11 +171,23 @@ class LevelTrader(Strategy):
                 side = Side.SELL if pos > 0 else Side.BUY
                 broker.submit(Order(self.symbol, side, OrderType.MARKET, qty=abs(pos), tag=tag), bar.ts)
             return
+        self._ensure_exits(ctx, bar.ts, pos)
         if self.p.breakeven_atr > 0 and not self.breakeven_done:
             best = bar.high - self.entry_price if pos > 0 else self.entry_price - bar.low
             if best >= self.p.breakeven_atr * self.atr:
                 self._move_stop(ctx, bar.ts, pos, self.entry_price)
                 self.breakeven_done = True
+
+    def _ensure_exits(self, ctx, ts, pos):
+        """Re-place exits that are gone while the position is open, e.g. GTC orders that hit
+        Robinhood's 90-day expiry during a long hold."""
+        live = {o.tag for o in ctx.broker.open_orders(self.symbol) if o.oco_group == self.exit_group}
+        if "stop" not in live:
+            self._move_stop(ctx, ts, pos, self.stop_price)
+        if self.p.target_atr > 0 and "target" not in live:
+            side = Side.SELL if pos > 0 else Side.BUY
+            ctx.broker.submit(Order(self.symbol, side, OrderType.LIMIT, qty=abs(pos), limit_price=self.target_price,
+                                    tif=TimeInForce.GTC, tag="target", oco_group=self.exit_group), ts)
 
     def _move_stop(self, ctx, ts, pos, price):
         """Replace the fixed stop (tag "stop") with one at `price`, keeping the same OCO group."""
@@ -246,6 +262,7 @@ class LevelTrader(Strategy):
             if fill.order_id in self.pending_entry_level and self.exit_group is None:
                 self.entry_day = fill.ts.tz_convert(ET).date()
                 self.entry_ts, self.entry_price, self.breakeven_done = fill.ts, fill.price, False
+                self.days_held = 0
                 direction = 1 if pos > 0 else -1
                 self.stop_price = stop
                 self.target_price = fill.price + direction * self.p.target_atr * self.atr
@@ -288,10 +305,36 @@ class DailyWeeklyLevels(LevelTrader):
             return []
         row = self.prior.loc[day]
         out = []
-        for name in ("pdh", "pdl", "pwh", "pwl"):
+        for name in self.p.levels:
             p = row[name]
             if not np.isfinite(p):
                 continue
+            kind = "resistance" if p > ref_price else "support"
+            out.append(Level(name, kind, p, p, {"level_dist_atr": abs(p - ref_price) / self.atr}))
+        return out
+
+
+class PlaceboDailyWeekly(DailyWeeklyLevels):
+    """Control for DailyWeeklyLevels: each level sits at the same distance from the open (in ATRs)
+    as that level did on a different, randomly chosen day of the same symbol. Order types, stops,
+    targets and sizing are unchanged, so comparing real and placebo results measures what the
+    actual prior highs and lows add beyond chance."""
+
+    def on_start(self, ctx):
+        super().on_start(ctx)
+        self.rng = np.random.default_rng(self.p.placebo_seed)
+        opens = self.daily["open"]
+        atr = self.daily_feat["atr"]
+        # Distance of each level above (+) or below (-) that day's open, in that day's ATRs.
+        self.offsets = self.prior[list(self.p.levels)].sub(opens, axis=0).div(atr, axis=0).dropna()
+
+    def find_levels(self, ctx, day, ref_price):
+        if self.offsets.empty:
+            return []
+        donor = self.offsets.iloc[self.rng.integers(len(self.offsets))]
+        out = []
+        for name in self.p.levels:
+            p = ref_price + donor[name] * self.atr
             kind = "resistance" if p > ref_price else "support"
             out.append(Level(name, kind, p, p, {"level_dist_atr": abs(p - ref_price) / self.atr}))
         return out

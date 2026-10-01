@@ -13,6 +13,7 @@ import pandas as pd
 from .broker import PaperBroker
 from .calendar import ET, Session
 from .fills import Bar
+from .orders import Order, OrderType, Side
 from .trades import TradeTracker
 
 
@@ -40,13 +41,14 @@ class Strategy:
 
 class Backtester:
     def __init__(self, broker: PaperBroker, strategy: Strategy, data: dict[str, pd.DataFrame],
-                 regular_hours_only: bool = False):
+                 regular_hours_only: bool = False, close_at_end: bool = True):
         self.broker = broker
         self.strategy = strategy
         self.data = data
         self.tracker = TradeTracker()
         self.ctx = Context(broker, data, self.tracker)
         self.regular_hours_only = regular_hours_only
+        self.close_at_end = close_at_end
 
     def run(self, start=None, end=None) -> Context:
         frames = []
@@ -90,6 +92,27 @@ class Backtester:
             self.tracker.on_bar(sym, bar)
             strat.on_bar(ctx, sym, bar)
         if cur_day is not None:
+            if self.close_at_end:
+                self._close_open_positions(last_bar={sym: (ts, row) for ts, row, sym in self._last_rows(stream)})
             strat.on_day_end(ctx, cur_day)
             ctx.equity_curve.append((cur_day, broker.account.equity()))
         return ctx
+
+    @staticmethod
+    def _last_rows(stream: pd.DataFrame):
+        for sym, g in stream.groupby("symbol"):
+            yield g.index[-1], g.iloc[-1], sym
+
+    def _close_open_positions(self, last_bar: dict) -> None:
+        """Market out of anything still open at the last bar's close, so trades still running
+        when the data ends show up in the journal (tagged "end_of_data") instead of vanishing."""
+        broker = self.broker
+        for sym, (ts, row) in last_bar.items():
+            qty = broker.account.position(sym).qty
+            if abs(qty) < 1e-9:
+                continue
+            broker.cancel_all(sym)
+            side = Side.SELL if qty > 0 else Side.BUY
+            broker.submit(Order(sym, side, OrderType.MARKET, qty=abs(qty), tag="end_of_data"), ts)
+            c = float(row["close"])
+            broker.process_bar(sym, Bar(ts, c, c, c, c, 1e12, Session.REGULAR))

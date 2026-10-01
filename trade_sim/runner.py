@@ -11,9 +11,10 @@ from .broker import PaperBroker
 from .calendar import TradingCalendar
 from .data import load_csv, save_csv
 from .engine import Backtester
-from .strategies.level_trader import DailyWeeklyLevels, LevelParams, SupportResistance
+from .strategies.level_trader import DailyWeeklyLevels, LevelParams, PlaceboDailyWeekly, SupportResistance
 
-STRATEGIES = {"daily_weekly": DailyWeeklyLevels, "sr_zones": SupportResistance}
+STRATEGIES = {"daily_weekly": DailyWeeklyLevels, "sr_zones": SupportResistance,
+              "placebo_daily_weekly": PlaceboDailyWeekly}
 
 
 def load_bars(symbol: str, start: str, end: str, feed: str = "sip", cache_dir: str = "data_cache") -> pd.DataFrame:
@@ -36,13 +37,15 @@ def run_level_backtest(df: pd.DataFrame, symbol: str, strategy: str = "daily_wee
 
     trade_start: bars before this date only warm up indicators (ATR, percentiles, zones);
     the simulation, trades and equity curve start here.
+    hold_days: 0 = flatten every day at 15:55; N > 0 = flatten at 15:55 after N trading days;
+    -1 = no time limit (exit only at the stop, target or other exit rules).
     param_overrides: any other LevelParams field (e.g. exit settings).
     """
     cal = cal or TradingCalendar()
     acct_type = AccountType(account)
     params = LevelParams(mode=mode, allow_short=acct_type == AccountType.MARGIN,
                          stop_atr=stop_atr, target_atr=target_atr,
-                         exit_eod=hold_days == 0, max_hold_days=max(hold_days, 1), **param_overrides)
+                         exit_eod=hold_days == 0, max_hold_days=max(hold_days, 0), **param_overrides)
     strat = STRATEGIES[strategy](symbol, params)
     broker = PaperBroker(Account(acct_type, cash=cash), cal)
     ctx = Backtester(broker, strat, {symbol: df}, regular_hours_only=regular_only).run(start=trade_start)
