@@ -9,6 +9,19 @@
   let G = null, tab = 'market', sheetT = null, qty = 1, seen = 0, toastTimer = null;
   const unread = () => Math.min(99, (G.seq || 0) - seen);
 
+  // ---------- trophies (persist across games)
+  const TROPHY_KEY = 'ws90_trophies_v1';
+  let trophies = {};
+  try { trophies = JSON.parse(localStorage.getItem(TROPHY_KEY)) || {}; } catch (e) {}
+  const sfx = (n) => window.Sfx && window.Sfx.play(n);
+  function noteAch(list) {
+    for (const a of list) {
+      if (!trophies[a.id]) trophies[a.id] = Date.now();
+      toast('🏆 ' + a.name); sfx('ach');
+    }
+    if (list.length) try { localStorage.setItem(TROPHY_KEY, JSON.stringify(trophies)); } catch (e) {}
+  }
+
   // ---------- helpers
   const money = (n, d = 0) => (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
   const big = (n) => Math.abs(n) >= 1e6 ? (n < 0 ? '-' : '') + '$' + (Math.abs(n) / 1e6).toFixed(2) + 'M' : money(n);
@@ -23,7 +36,7 @@
     clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), 2200);
   }
   function save() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(G)); } catch (e) {} }
-  function load() { try { const s = localStorage.getItem(SAVE_KEY); return s ? JSON.parse(s) : null; } catch (e) { return null; } }
+  function load() { try { const s = JSON.parse(localStorage.getItem(SAVE_KEY)); return s && s.v === E.SAVE_VERSION ? s : null; } catch (e) { return null; } }
   function clearSave() { try { localStorage.removeItem(SAVE_KEY); } catch (e) {} }
 
   function chartSvg(arr, h = 110, w = 320, fill = true) {
@@ -47,7 +60,7 @@
   function render() {
     renderTop();
     const v = $('view'), scroll = v.scrollTop;
-    v.innerHTML = { market: viewMarket, port: viewPort, life: viewLife, news: viewNews }[tab]();
+    v.innerHTML = { market: viewMarket, port: viewPort, life: viewLife, news: viewNews, trophy: viewTrophies }[tab]();
     v.scrollTop = scroll;
     renderTabs();
     if (sheetT) renderSheet();
@@ -60,21 +73,22 @@
     const d = nw - prev;
     const bills = E.monthlyCosts(G), inc = E.monthlyIncome(G);
     $('top').innerHTML = `
-      <div class="top-row"><span class="date">📅 ${dateStr(G.week)}</span><span class="rank">${E.rankOf(nw)}</span></div>
+      <div class="top-row"><span class="date">📅 ${dateStr(G.week)}</span><span><span class="rank">${E.rankOf(nw)}</span> <button class="mute" data-mute="1" aria-label="Toggle sound">${window.Sfx && window.Sfx.muted ? '🔇' : '🔊'}</button></span></div>
       <div class="nw ${nw < E.START_CASH * .5 ? 'down' : ''}">${big(nw)} <small class="${cls(d)}" style="font-size:12px">${d ? pct(d / Math.max(prev, 1)) : ''}</small></div>
-      <div class="sub"><span>Cash <b>${money(G.cash)}</b></span><span>Stocks <b>${big(E.stockValue(G))}</b></span><span>Bills <b>${money(bills - inc)}/mo</b></span></div>`;
+      <div class="sub">${G.cash < 0 ? `<span class="down">Margin debt <b>${money(-G.cash)}</b></span>` : `<span>Cash <b>${money(G.cash)}</b></span>`}<span>Stocks <b>${big(E.stockValue(G))}</b></span>${Object.keys(G.shorts).length ? `<span>Short <b>${big(E.shortValue(G))}</b></span>` : ''}<span>Bills <b>${money(bills - inc)}/mo</b></span></div>`;
     const heads = G.news.filter((n) => n.tag !== 'tip').slice(0, 5).map((n) => n.text).join('   ◆   ');
     if ($('tapeText').dataset.t !== heads) { $('tapeText').textContent = heads; $('tapeText').dataset.t = heads; }
   }
 
   function renderTabs() {
-    const T = [['market', '📈', 'Market'], ['port', '💼', 'Portfolio'], ['life', '🏠', 'Lifestyle'], ['news', '📰', 'News']];
+    const T = [['market', '📈', 'Market'], ['port', '💼', 'Portfolio'], ['life', '🏠', 'Lifestyle'], ['news', '📰', 'News'], ['trophy', '🏆', 'Trophies']];
     $('tabs').innerHTML = T.map(([id, ic, lb]) =>
       `<button data-tab="${id}" class="${tab === id ? 'on' : ''}"><span>${ic}</span>${lb}${id === 'news' && unread() ? `<i class="badge">${unread()}</i>` : ''}</button>`).join('');
   }
 
   function viewMarket() {
     let html = '';
+    if (G.offer) html += '<div class="card offer-card row tap" data-offer="1"><div class="grow" style="font-size:13px">📞 <b>Insider offer waiting</b> — an "old friend" has a hot tip. Tap to answer.</div><span>›</span></div>';
     if (G.tips.length) {
       html += '<h2>📞 This week\'s tips</h2>' + G.tips.map((t) => `<div class="card tip-card row tap" data-stock="${t.t}"><div class="grow" style="font-size:13px">${t.text}</div><span class="dim">›</span></div>`).join('');
     } else if (E.TECH[G.tech].tips === 0) {
@@ -100,6 +114,13 @@
       <div class="stat"><small>Peak</small><b>${big(s.peak)}</b></div>
       <div class="stat"><small>Realized P/L</small><b class="${cls(s.realized)}">${big(s.realized)}</b></div>
       <div class="stat"><small>Trades · fees</small><b>${s.trades} · ${money(s.fees)}</b></div></div>`;
+    const lvl = E.marginLevel(G), bp = Math.max(0, 2 * E.equity(G) - E.gross(G));
+    html += `<div class="stats" style="margin-top:6px">
+      <div class="stat"><small>Buying power (2x)</small><b>${big(bp)}</b></div>
+      <div class="stat"><small>Margin level (call @ 25%)</small><b class="${lvl < .4 ? 'down' : ''}">${lvl === Infinity ? '—' : (lvl * 100).toFixed(0) + '%'}</b></div>
+      <div class="stat"><small>Gains this year</small><b class="${cls(G.ytd)}">${big(G.ytd)}</b></div>
+      <div class="stat"><small>Tax due (Apr)</small><b>${G.taxDue > 0 ? money(G.taxDue) : money(Math.max(0, G.ytd) * E.TAX_RATE) + ' est.'}</b></div></div>`;
+    if (G.heat) html += `<div class="card" style="margin-top:6px;font-size:12px">🕵️ SEC heat: <b>${'🔥'.repeat(G.heat)}</b>${G.fined ? ' · <span class="down">Already fined — next time is prison</span>' : ''}</div>`;
     html += `<h2>Net worth history</h2><div class="card">${chartSvg(G.nwHist.slice(-156))}</div>`;
     html += '<h2>Positions</h2>';
     const ts = Object.keys(G.holdings);
@@ -108,6 +129,14 @@
       const h = G.holdings[t], st = G.stocks[t], pl = (st.price - h.cost) * h.shares, plp = st.price / h.cost - 1;
       html += `<div class="card row tap" data-stock="${t}">
         <div class="grow"><div class="tick">${t}</div><div class="nm">${h.shares} sh @ ${px(h.cost)}</div></div>
+        <div class="px"><div class="p">${money(h.shares * st.price)}</div><div class="c ${cls(pl)}">${money(pl)} (${pct(plp)})</div></div></div>`;
+    }
+    const ss = Object.keys(G.shorts);
+    if (ss.length) html += '<h2>Short positions</h2>';
+    for (const t of ss) {
+      const h = G.shorts[t], st = G.stocks[t], pl = (h.entry - st.price) * h.shares, plp = h.entry / st.price - 1;
+      html += `<div class="card row tap" data-stock="${t}">
+        <div class="grow"><div class="tick">${t}<span class="tag">SHORT</span></div><div class="nm">${h.shares} sh @ ${px(h.entry)}</div></div>
         <div class="px"><div class="p">${money(h.shares * st.price)}</div><div class="c ${cls(pl)}">${money(pl)} (${pct(plp)})</div></div></div>`;
     }
     return html;
@@ -145,6 +174,15 @@
     return html;
   }
 
+  function viewTrophies() {
+    const have = E.ACH.filter((a) => trophies[a.id] || G.ach[a.id]).length;
+    return `<h2>Achievements · ${have}/${E.ACH.length}</h2>` + E.ACH.map((a) => {
+      const got = trophies[a.id] || G.ach[a.id];
+      return `<div class="card item row ${got ? 'cur' : ''}" style="${got ? '' : 'opacity:.5'}"><div class="emoji">${got ? a.emoji : '🔒'}</div>
+        <div class="grow"><div class="title">${a.name}</div><div class="desc">${a.desc}</div></div></div>`;
+    }).join('');
+  }
+
   function viewNews() {
     seen = G.seq || 0; renderTabs();
     return '<h2>Headlines</h2>' + G.news.map((n) =>
@@ -158,7 +196,8 @@
   function renderSheet() {
     const s = E.STOCKS.find((x) => x.t === sheetT), st = G.stocks[sheetT], h = G.holdings[sheetT];
     if (!st.active) return closeSheet();
-    const comm = E.commission(G), mb = E.maxBuy(G, sheetT), ch = st.price / st.prev - 1;
+    const comm = E.commission(G), mb = E.maxBuy(G, sheetT), ms = E.maxShort(G, sheetT), ch = st.price / st.prev - 1;
+    const sh = G.shorts[sheetT], bp = Math.max(0, 2 * E.equity(G) - E.gross(G));
     const hi = Math.max(...G.hist[sheetT]), lo = Math.min(...G.hist[sheetT]);
     const total = qty * st.price;
     const tip = G.tips.find((x) => x.t === sheetT);
@@ -169,11 +208,14 @@
       <div class="sub" style="justify-content:space-between"><span>2yr low <b>${px(lo)}</b></span><span>2yr high <b>${px(hi)}</b></span></div>
       ${tip ? `<div class="card tip-card" style="margin-top:8px;font-size:13px">📞 ${tip.text}</div>` : ''}
       ${h ? `<div class="card" style="margin-top:8px;font-size:13px">You own <b>${h.shares}</b> @ ${px(h.cost)} · P/L <b class="${cls(st.price - h.cost)}">${money((st.price - h.cost) * h.shares)}</b></div>` : ''}
+      ${sh ? `<div class="card" style="margin-top:8px;font-size:13px">You are <b class="down">SHORT ${sh.shares}</b> @ ${px(sh.entry)} · P/L <b class="${cls(sh.entry - st.price)}">${money((sh.entry - st.price) * sh.shares)}</b></div>` : ''}
       <div class="qty"><button data-q="-1">−</button><input id="qtyIn" type="number" inputmode="numeric" min="0" value="${qty}"><button data-q="1">+</button></div>
-      <div class="chips"><button data-qs="1">1</button><button data-qs="10">10</button><button data-qs="100">100</button><button data-qs="max">Max buy</button>${h ? '<button data-qs="all">All</button>' : ''}</div>
-      <div class="dim mono" style="font-size:12px;margin-bottom:10px">${qty} × ${px(st.price)} = ${money(total, 2)} · commission ${money(comm)} · cash ${money(G.cash)}</div>
+      <div class="chips"><button data-qs="1">1</button><button data-qs="10">10</button><button data-qs="100">100</button><button data-qs="max">Max</button>${h || sh ? '<button data-qs="all">All</button>' : ''}</div>
+      <div class="dim mono" style="font-size:12px;margin-bottom:10px">${qty} × ${px(st.price)} = ${money(total, 2)} · commission ${money(comm)} · buying power ${money(bp)}</div>
       <div class="two"><button class="buy" data-trade="buy" ${qty < 1 || qty > mb ? 'disabled' : ''}>Buy</button>
         <button class="sell" data-trade="sell" ${!h || qty < 1 || qty > h.shares ? 'disabled' : ''}>Sell</button></div>
+      <div class="two" style="margin-top:8px"><button class="short" data-trade="short" ${qty < 1 || qty > ms ? 'disabled' : ''}>Short 🐻</button>
+        <button data-trade="cover" ${!sh || qty < 1 || qty > sh.shares ? 'disabled' : ''}>Cover</button></div>
       <button style="width:100%;margin-top:8px;background:none" data-close="1">Close</button>`;
   }
 
@@ -193,24 +235,44 @@
 
   // ---------- game flow
   let busy = false;
+  const STOP = ['repo', 'homeless', 'bust', 'end', 'margin', 'offer', 'sec', 'warn', 'prison', 'insider'];
+  const MODAL = {
+    news: ['📰 BREAKING NEWS', '', 'news'], repo: ['🚨 Repo Man!', 'bad', 'alarm'], bust: ['💥 Bankruptcy', 'bad', 'error'],
+    margin: ['📞 MARGIN CALL', 'bad', 'alarm'], insider: ['🤫 Insider trade', '', 'sneaky'], warn: ['👀 Uh-oh…', 'bad', 'sneaky'],
+    sec: ['⚖️ SEC SETTLEMENT', 'bad', 'alarm'],
+  };
+
+  async function offerModal() {
+    const o = G.offer; if (!o) return;
+    const i = await showModal({
+      title: '📞 A "friend" calls…',
+      body: `<p>${o.text}</p><p class="dim" style="font-size:12px">Insider trading is a federal crime. If you profit you might get caught: first time is a huge fine, second time is <b>prison</b>.</p>`,
+      buttons: [['Walk away', ''], ['Take the tip', 'primary']],
+    });
+    if (!G.offer) return;
+    if (i === 1) {
+      const t = G.offer.t, r = E.acceptOffer(G); sfx('sneaky'); toast(r.msg); save(); render(); openSheet(t);
+    } else { E.declineOffer(G); toast('You walked away. Clean hands.'); save(); render(); }
+  }
+
   async function advance(n) {
     if (busy || G.over) return;
-    busy = true;
+    busy = true; sfx('week');
     const evs = [];
     for (let i = 0; i < n && !G.over; i++) {
       const r = E.advanceWeek(G);
       evs.push(...r.events);
-      if (r.events.some((e) => ['news', 'repo', 'homeless', 'bust', 'end'].includes(e.kind) && (e.kind !== 'news' || /!|CRASH|CRISIS/.test(e.text)))) break;
+      if (r.events.some((e) => STOP.includes(e.kind) || (e.kind === 'news' && /!|CRASH|CRISIS/.test(e.text)))) break;
     }
     save(); render();
-    if (evs.length) buzz(30);
+    noteAch(evs.filter((e) => e.kind === 'ach').map((e) => e.ach));
+    if (evs.some((e) => e.kind !== 'ach')) buzz(30);
     for (const e of evs) {
-      if (e.kind === 'homeless' || e.kind === 'end') continue;
-      await showModal({
-        kind: e.kind === 'news' ? '' : 'bad',
-        title: e.kind === 'repo' ? '🚨 Repo Man!' : e.kind === 'bust' ? '💥 Bankruptcy' : '📰 BREAKING NEWS',
-        body: `<p>${e.text}</p>`,
-      });
+      if (e.kind === 'homeless' || e.kind === 'end' || e.kind === 'prison' || e.kind === 'ach') continue;
+      if (e.kind === 'offer') { sfx('sneaky'); await offerModal(); continue; }
+      const m = MODAL[e.kind] || MODAL.news;
+      sfx(m[2]);
+      await showModal({ kind: m[1], title: m[0], body: `<p>${e.text}</p>` });
     }
     busy = false;
     if (G.over) endScreen();
@@ -220,15 +282,23 @@
     const nw = E.netWorth(G), s = G.stats;
     clearSave();
     const stats = `<p class="mono dim" style="font-size:12px">Peak ${big(s.peak)} (${dateStr(s.peakWeek)})<br>${s.trades} trades · ${money(s.fees)} in fees</p>`;
-    let c;
     if (G.over === 'homeless') {
-      c = await showModal({
+      sfx('lose');
+      await showModal({
         kind: 'bad', title: '🥫 HOMELESS',
         body: `<p>${dateStr(G.week)}. The landlord changed the locks. The Porsche, the Rolex, the dream — all gone.</p><p>You're sleeping on a bench in Battery Park with a copy of the Journal for a blanket.</p>${stats}`,
         buttons: [['Start over', 'primary']],
       });
+    } else if (G.over === 'prison') {
+      sfx('lose');
+      await showModal({
+        kind: 'bad', title: '⛓️ FEDERAL PRISON',
+        body: `<p>${dateStr(G.week)}. Two strikes with the SEC and the feds came for you. The Armani suit is now an orange jumpsuit.</p><p>You'll be trading cigarettes at Club Fed for the next few years. At least the stock tips are better in here.</p>${stats}`,
+        buttons: [['Start over', 'primary']],
+      });
     } else {
-      c = await showModal({
+      sfx('win');
+      await showModal({
         kind: 'good', title: '🎆 THE DECADE ENDS',
         body: `<p>December 2000. You finished as a</p><p style="font-size:22px;color:var(--amber);font-weight:800">${E.rankOf(nw)}</p><p>Final net worth <b class="mono">${big(nw)}</b></p>${stats}`,
         buttons: [['Play again', 'primary']],
@@ -248,25 +318,37 @@
 
   // ---------- events
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('button,[data-stock]'); if (!t) return;
-    if (t.dataset.tab) { tab = t.dataset.tab; $('view').scrollTop = 0; render(); return; }
+    const t = e.target.closest('button,[data-stock],[data-offer]'); if (!t) return;
+    if (t.dataset.mute) { window.Sfx.toggle(); render(); return; }
+    if (t.closest('[data-offer]')) return offerModal();
+    if (t.dataset.tab) { sfx('tap'); tab = t.dataset.tab; $('view').scrollTop = 0; render(); return; }
     if (t.dataset.stock && !t.matches('button')) return openSheet(t.dataset.stock);
     if (t.dataset.close) return closeSheet();
     if (t.dataset.buy || t.dataset.sell) {
       const [cat, id] = (t.dataset.buy || t.dataset.sell).split(':');
       const key = cat === 'lux' ? id : +id;
       const r = t.dataset.buy ? E.buyItem(G, cat, key) : E.sellItem(G, cat, key);
-      toast(r.msg); if (r.ok) { buzz(20); save(); } render(); return;
+      toast(r.msg); sfx(r.ok ? 'buy' : 'error'); if (r.ok) { buzz(20); noteAch(E.checkAchievements(G)); save(); } render(); return;
     }
     if (t.dataset.q) { qty = Math.max(0, (parseInt($('qtyIn').value) || 0) + +t.dataset.q); renderSheet(); return; }
     if (t.dataset.qs) {
-      const h = G.holdings[sheetT];
-      qty = t.dataset.qs === 'max' ? E.maxBuy(G, sheetT) : t.dataset.qs === 'all' ? (h ? h.shares : 0) : +t.dataset.qs;
+      const h = G.holdings[sheetT], sh = G.shorts[sheetT];
+      qty = t.dataset.qs === 'max' ? Math.max(E.maxBuy(G, sheetT), E.maxShort(G, sheetT)) : t.dataset.qs === 'all' ? (h ? h.shares : sh ? sh.shares : 0) : +t.dataset.qs;
+      sfx('tap');
       renderSheet(); return;
     }
     if (t.dataset.trade) {
-      const r = t.dataset.trade === 'buy' ? E.buy(G, sheetT, qty) : E.sell(G, sheetT, qty);
-      toast(r.msg); if (r.ok) { buzz(20); save(); const h = G.holdings[sheetT]; if (t.dataset.trade === 'sell') qty = h ? Math.min(qty, h.shares) : 1; if (qty < 1) qty = 1; } render(); return;
+      const k = t.dataset.trade;
+      const r = { buy: E.buy, sell: E.sell, short: E.short, cover: E.cover }[k](G, sheetT, qty);
+      toast(r.msg); sfx(r.ok ? (k === 'buy' || k === 'short' ? 'buy' : 'sell') : 'error');
+      if (r.ok) {
+        buzz(20); noteAch(E.checkAchievements(G)); save();
+        const h = G.holdings[sheetT], sh = G.shorts[sheetT];
+        if (k === 'sell') qty = h ? Math.min(qty, h.shares) : 1;
+        if (k === 'cover') qty = sh ? Math.min(qty, sh.shares) : 1;
+        if (qty < 1) qty = 1;
+      }
+      render(); return;
     }
   });
   document.addEventListener('input', (e) => { if (e.target.id === 'qtyIn') { qty = Math.max(0, parseInt(e.target.value) || 0); const pos = e.target.selectionStart; renderSheet(); const i = $('qtyIn'); i.focus(); try { i.setSelectionRange(pos, pos); } catch (x) {} } });
@@ -276,4 +358,5 @@
   $('btnNew').addEventListener('click', newGame);
   $('btnContinue').addEventListener('click', cont);
   if (load()) $('btnContinue').classList.remove('hidden');
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();

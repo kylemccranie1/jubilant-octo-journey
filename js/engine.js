@@ -8,6 +8,10 @@
   const WEEK_MS = 7 * 864e5;
   const SELL_RATIO = 0.6;
   const HIST_LEN = 104;
+  const TAX_RATE = 0.28;       // 1990s top capital-gains rate
+  const MARGIN_RATE = 0.09;    // annual interest on margin debt
+  const MAINT = 0.25;          // maintenance margin (equity / gross exposure)
+  const SAVE_VERSION = 2;
 
   const weekOf = (y, m, d) => Math.floor((Date.UTC(y, m - 1, d) - START_MS) / WEEK_MS);
   const dateOf = (week) => new Date(START_MS + week * WEEK_MS);
@@ -15,6 +19,7 @@
 
   // ---------------------------------------------------------------- content
   const STOCKS = [
+    { t: 'IDX', name: 'Big Board Index Fund', sector: 'idx', beta: 1.0, vol: .12, p0: 35 },
     { t: 'MTRX', name: 'Microtronix', sector: 'tech', beta: 1.3, vol: .38, p0: 42 },
     { t: 'CSFT', name: 'CompuSoft', sector: 'tech', beta: 1.4, vol: .40, p0: 25 },
     { t: 'GULF', name: 'Gulf Crown Oil', sector: 'energy', beta: .6, vol: .24, p0: 38 },
@@ -45,7 +50,7 @@
     bio: { def: .06, 1992: -.12, 1999: .25 },
     air: { def: 0, 1990: -.15, 1998: .15 },
     energy: { def: 0 }, bank: { def: .02 }, cons: { def: .03 }, media: { def: .03 },
-    tele: { def: .03 }, auto: { def: 0 }, pen: { def: 0 },
+    tele: { def: .03 }, auto: { def: 0 }, pen: { def: 0 }, idx: { def: 0 },
   };
 
   // scripted historical events: shocks are immediate % moves; mom = extra weekly drift for n weeks
@@ -132,8 +137,9 @@
 
   function newGame(seed) {
     const G = {
-      v: 1, rs: (seed == null ? (Math.random() * 2 ** 31) | 0 : seed) | 0,
-      week: 0, cash: START_CASH, holdings: {}, stocks: {}, hist: {},
+      v: SAVE_VERSION, rs: (seed == null ? (Math.random() * 2 ** 31) | 0 : seed) | 0,
+      week: 0, cash: START_CASH, holdings: {}, shorts: {}, stocks: {}, hist: {},
+      ytd: 0, taxDue: 0, heat: 0, fined: false, offer: null, insider: null, sec: null, lastOffer: -99, flags: {}, ach: {},
       home: 0, car: 0, tech: 0, lux: [],
       billMonth: monthIdx(0), mom: {}, smom: {}, next: null, tips: [],
       news: [], nwHist: [START_CASH], over: null,
@@ -190,7 +196,7 @@
     }
     // random company news (price move is baked into this week's return)
     if (rnd(G) < .65) {
-      const cands = STOCKS.filter((s) => rets[s.t] != null && s.ipo !== week);
+      const cands = STOCKS.filter((s) => rets[s.t] != null && s.ipo !== week && s.sector !== 'idx');
       if (cands.length) companyNews(G, pick(G, cands), rets, news);
     }
     for (const t in rets) rets[t] = clamp(rets[t], -.6, 1.5);
@@ -223,6 +229,7 @@
   function advanceWeek(G) {
     const events = [];
     if (G.over) return { events, over: G.over };
+    if (G.offer) G.offer = null; // unanswered insider offers expire
     const nx = G.next;
     G.week = nx.week;
     const date = dateOf(G.week);
@@ -244,30 +251,44 @@
       const h = G.hist[s.t]; h.push(st.price); if (h.length > HIST_LEN) h.shift();
     }
 
-    if (monthIdx(G.week) !== G.billMonth) {
+    resolveInsider(G, events);
+    checkMargin(G, events);
+
+    if (!G.over && monthIdx(G.week) !== G.billMonth) {
       G.billMonth = monthIdx(G.week);
       payBills(G, events);
     }
+    if (!G.over) checkSec(G, events);
 
     if (!G.over) {
       const nw = netWorth(G);
       G.nwHist.push(nw); if (G.nwHist.length > 600) G.nwHist.shift();
       if (nw > G.stats.peak) { G.stats.peak = nw; G.stats.peakWeek = G.week; }
+      if (nw < 500) G.flags.low = true;
       if (date.getTime() + WEEK_MS > END_MS) {
         G.over = 'end';
         events.push({ kind: 'end', text: 'The decade is over.' });
       }
     }
-    if (!G.over) { G.next = computeNext(G, G.week + 1); makeTips(G); }
+    for (const a of checkAchievements(G)) events.push({ kind: 'ach', text: a.name, ach: a });
+    if (!G.over) { G.next = computeNext(G, G.week + 1); makeTips(G); maybeOffer(G, events); }
     return { events, over: G.over };
   }
 
   function delist(G, s, events) {
     const st = G.stocks[s.t];
     st.delisted = true; st.active = false;
-    const h = G.holdings[s.t];
     let msg = `${s.name} (${s.t}) files for CHAPTER 11 and is delisted.`;
-    if (h) { G.stats.realized -= h.cost * h.shares; msg += ` Your ${h.shares} shares are worthless!`; delete G.holdings[s.t]; }
+    const h = G.holdings[s.t], sh = G.shorts[s.t];
+    if (h) {
+      const loss = h.cost * h.shares; realize(G, -loss);
+      if (loss >= 10000) G.flags.bust = true;
+      msg += ` Your ${h.shares} shares are worthless!`; delete G.holdings[s.t];
+    }
+    if (sh) {
+      const gain = sh.entry * sh.shares; realize(G, gain); G.flags.shortWin = true;
+      msg += ` Your short position pays out ${money(gain)}!`; delete G.shorts[s.t];
+    }
     addNews(G, 'co', msg); events.push({ kind: 'bust', text: msg });
   }
 
@@ -275,8 +296,8 @@
     const st = G.stocks[s.t];
     st.price /= 2; st.prev /= 2;
     G.hist[s.t] = G.hist[s.t].map((p) => p / 2);
-    const h = G.holdings[s.t];
-    if (h) { h.shares *= 2; h.cost /= 2; }
+    const h = G.holdings[s.t]; if (h) { h.shares *= 2; h.cost /= 2; }
+    const sh = G.shorts[s.t]; if (sh) { sh.shares *= 2; sh.entry /= 2; }
     const msg = `${s.name} (${s.t}) announces a 2-for-1 stock split.`;
     addNews(G, 'co', msg); events.push({ kind: 'news', text: msg });
   }
@@ -285,7 +306,7 @@
     G.tips = [];
     const tier = TECH[G.tech];
     if (!tier.tips) return;
-    const cands = STOCKS.filter((s) => G.next.rets[s.t] != null && G.stocks[s.t].active);
+    const cands = STOCKS.filter((s) => G.next.rets[s.t] != null && G.stocks[s.t].active && s.sector !== 'idx');
     const used = new Set();
     const sources = ['Your barber', 'A guy at the bar', 'Your broker', 'The Quotron', 'A Goldman insider', 'Your analyst'];
     for (let i = 0; i < tier.tips && cands.length; i++) {
@@ -299,6 +320,77 @@
     for (const tp of G.tips) addNews(G, 'tip', tp.text);
   }
 
+  // ---------------------------------------------------------------- insider trading
+  function maybeOffer(G, events) {
+    if (G.offer || G.insider || G.sec) return;
+    if (G.week < 20 || G.week - G.lastOffer < 26 || netWorth(G) < 15000 || rnd(G) > .035) return;
+    const cands = STOCKS.filter((s) => G.next.rets[s.t] != null && G.stocks[s.t].active && s.sector !== 'idx');
+    const s = pick(G, cands), up = rnd(G) < .55;
+    G.lastOffer = G.week;
+    const text = `Your old roommate, now at an investment bank, calls late at night: "${s.name} (${s.t}) is about to ${up ? 'announce a takeover' : 'restate its earnings'}. Next week it's going to ${up ? 'soar' : 'collapse'}. You didn't hear it from me."`;
+    G.offer = { t: s.t, up, mv: up ? .3 + rnd(G) * .25 : -(.3 + rnd(G) * .2), text };
+    events.push({ kind: 'offer', text });
+  }
+  function acceptOffer(G) {
+    const o = G.offer; if (!o) return { ok: false, msg: 'No offer.' };
+    const s = STOCKS.find((x) => x.t === o.t);
+    G.next.rets[o.t] = clamp(G.next.rets[o.t] + o.mv, -.6, 1.5);
+    G.next.news.push({ tag: 'co', major: true, t: o.t, text: o.up
+      ? `${s.name} (${s.t}) announces SURPRISE ACQUISITION — shares soar!`
+      : `${s.name} (${s.t}) restates earnings; fraud probe launched — shares collapse!` });
+    G.tips = G.tips.filter((x) => x.t !== o.t);
+    G.insider = { t: o.t, up: o.up, week: G.next.week };
+    G.heat++; G.offer = null;
+    return { ok: true, msg: `Insider tip taken. Position in ${o.t} now, before the news breaks.` };
+  }
+  function declineOffer(G) { G.offer = null; return { ok: true, msg: 'You walked away. Clean hands.' }; }
+
+  function resolveInsider(G, events) {
+    const ins = G.insider;
+    if (!ins || ins.week !== G.week) return;
+    G.insider = null;
+    const st = G.stocks[ins.t], d = st.price - st.prev;
+    const h = G.holdings[ins.t], sh = G.shorts[ins.t];
+    const gain = ins.up ? (h ? h.shares * d : 0) : (sh ? sh.shares * -d : 0);
+    if (gain > 0) {
+      G.flags.insiderWin = true;
+      const p = .25 + .2 * (G.heat - 1);
+      if (rnd(G) < p) G.sec = { at: G.week + 3 + Math.floor(rnd(G) * 6), profit: gain, warned: false };
+      const text = `Your insider trade in ${ins.t} paid off: +${money(gain)}. Hope nobody noticed…`;
+      addNews(G, 'life', text); events.push({ kind: 'insider', text });
+    } else {
+      const text = `You didn't act on the ${ins.t} tip. The stock ${ins.up ? 'soared' : 'collapsed'} without you.`;
+      addNews(G, 'life', text); events.push({ kind: 'insider', text });
+    }
+  }
+  function checkSec(G, events) {
+    const sec = G.sec; if (!sec) return;
+    if (G.week === sec.at - 1 && !sec.warned) {
+      sec.warned = true;
+      const text = 'Unmarked sedans are parked outside your building. Your phone clicks when you pick it up.';
+      addNews(G, 'life', text); events.push({ kind: 'warn', text });
+    }
+    if (G.week < sec.at) return;
+    G.sec = null;
+    if (G.fined) {
+      G.over = 'prison';
+      const text = 'FBI agents arrive with a warrant. Second offense. You are going to federal prison.';
+      addNews(G, 'life', text); events.push({ kind: 'prison', text }); return;
+    }
+    G.fined = true; G.flags.fined = true;
+    const fine = Math.max(10000, sec.profit * 3), msgs = [];
+    const ok = liquidateFor(G, () => fine, msgs);
+    if (ok) {
+      G.cash -= fine;
+      const text = `SEC SETTLEMENT: insider trading. You disgorge your profits and pay a ${money(fine)} fine.${msgs.length ? ' ' + msgs.join('. ') + '.' : ''} One more strike and it's prison.`;
+      addNews(G, 'life', text); events.push({ kind: 'sec', text });
+    } else {
+      G.over = 'homeless';
+      const text = `SEC fines you ${money(fine)}. You can't pay, and everything is seized. You're on the street.`;
+      addNews(G, 'life', text); events.push({ kind: 'homeless', text });
+    }
+  }
+
   // ---------------------------------------------------------------- money
   const livingCost = (G) => 150 + 100 * G.home;
   function monthlyCosts(G) {
@@ -307,9 +399,17 @@
   }
   const monthlyIncome = (G) => (G.home <= 1 ? 400 : 0); // diner job — you quit once you move up
   const stockValue = (G) => { let v = 0; for (const t in G.holdings) v += G.holdings[t].shares * G.stocks[t].price; return v; };
+  const shortValue = (G) => { let v = 0; for (const t in G.shorts) v += G.shorts[t].shares * G.stocks[t].price; return v; };
   const assetValue = (G) => SELL_RATIO * (CARS[G.car].price + TECH[G.tech].price + G.lux.reduce((a, id) => a + LUX.find((l) => l.id === id).price, 0));
-  const netWorth = (G) => G.cash + stockValue(G) + assetValue(G);
+  const netWorth = (G) => G.cash + stockValue(G) - shortValue(G) + assetValue(G);
+  const gross = (G) => stockValue(G) + shortValue(G);
+  const equity = (G) => G.cash + stockValue(G) - shortValue(G);
+  const marginDebt = (G) => Math.max(0, -G.cash);
   const commission = (G) => TECH[G.tech].comm;
+  const marginLevel = (G) => { const g = gross(G); return g > 0 ? equity(G) / g : Infinity; };
+  const money = (n) => '$' + Math.round(n).toLocaleString('en-US');
+
+  function realize(G, amt) { G.ytd += amt; G.stats.realized += amt; }
 
   // sell just enough shares (largest position first) to bring cash up to `target`; no commission when forced
   function raiseCash(G, target) {
@@ -318,26 +418,18 @@
     for (const t of order) {
       if (G.cash >= target) break;
       const h = G.holdings[t], px = G.stocks[t].price;
-      const n = Math.min(h.shares, Math.ceil((target - G.cash) / px));
-      sell(G, t, n, true); sold = true;
+      sell(G, t, Math.min(h.shares, Math.ceil((target - G.cash) / px)), true); sold = true;
     }
     return sold;
   }
 
-  function payBills(G, events) {
-    const income = monthlyIncome(G);
-    let costs = monthlyCosts(G);
-    let need = costs - income;
-    const start = { home: G.home, car: G.car, tech: G.tech, lux: G.lux.length, stocks: Object.keys(G.holdings).length };
-    if (G.cash >= need) {
-      G.cash -= need;
-      addNews(G, 'life', `Monthly bills paid: $${Math.round(costs).toLocaleString()}${income ? ` (diner paycheck +$${income})` : ''}.`);
-      return;
-    }
-    const msgs = [];
+  // Free up cash to cover needFn() by liquidating stocks, then luxuries, car, gear, home. Returns false if impossible.
+  function liquidateFor(G, needFn, msgs) {
     let guard = 40;
-    while (G.cash < need && guard--) {
-      if (Object.keys(G.holdings).length) { raiseCash(G, need); if (!msgs.includes('Broker sold stock to cover bills')) msgs.push('Broker sold stock to cover bills'); }
+    while (G.cash < needFn() && guard--) {
+      const need = needFn(), g = gross(G);
+      if (g > 0 && equity(G) - need >= 0.35 * g) return true; // can float it on margin safely
+      if (Object.keys(G.holdings).length) { raiseCash(G, need); if (!msgs.includes('Broker sold stock')) msgs.push('Broker sold stock'); }
       else if (G.lux.length) {
         const id = G.lux.slice().sort((a, b) => LUX.find((l) => l.id === b).price - LUX.find((l) => l.id === a).price)[0];
         sellItem(G, 'lux', id, true); msgs.push(`Repo: ${LUX.find((l) => l.id === id).name} sold`);
@@ -345,50 +437,148 @@
       else if (G.tech > 0) { G.cash += SELL_RATIO * TECH[G.tech].price; msgs.push(`Repo: ${TECH[G.tech].name} sold`); G.tech = 0; }
       else if (G.home > 0) { G.home--; msgs.push(`Evicted! Downgraded to ${HOMES[G.home].name}`); }
       else break;
-      need = monthlyCosts(G) - monthlyIncome(G);
     }
-    if (G.cash >= need) {
-      G.cash -= need;
+    return G.cash >= needFn();
+  }
+
+  function payBills(G, events) {
+    const month = dateOf(G.week).getUTCMonth();
+    if (month === 0) { // new tax year: settle last year's gains
+      const net = G.ytd;
+      G.taxDue = Math.max(0, net) * TAX_RATE; G.ytd = Math.min(0, net);
+      if (G.taxDue > 0) addNews(G, 'life', `Tax time: ${money(net)} in capital gains last year. The IRS wants ${money(G.taxDue)} by April.`);
+    }
+    const interest = (G.cash < 0 ? -G.cash * MARGIN_RATE / 12 : 0) + shortValue(G) * .01 / 12;
+    const tax = month === 3 ? G.taxDue : 0;
+    const needFn = () => monthlyCosts(G) - monthlyIncome(G) + interest + tax;
+    const costs = monthlyCosts(G), income = monthlyIncome(G), msgs = [];
+    const ok = liquidateFor(G, needFn, msgs);
+    if (!ok) {
+      G.cash = Math.max(0, G.cash);
+      G.over = 'homeless';
+      const text = "You can't make rent. Everything is gone. You're out on the street.";
+      addNews(G, 'life', text); events.push({ kind: 'homeless', text }); return;
+    }
+    G.cash -= needFn();
+    if (tax > 0) { G.taxDue = 0; G.flags.taxPaid = (G.flags.taxPaid || 0) + tax; addNews(G, 'life', `You paid the IRS ${money(tax)}.`); }
+    if (msgs.length) {
       const text = 'Bills overdue! ' + msgs.join('. ') + '.';
       addNews(G, 'life', text); events.push({ kind: 'repo', text });
     } else {
-      G.cash = Math.max(0, G.cash);
-      G.over = 'homeless';
-      const text = 'You can\'t make rent. Everything is gone. You\'re out on the street.';
-      addNews(G, 'life', text); events.push({ kind: 'homeless', text });
+      addNews(G, 'life', `Monthly bills paid: ${money(costs)}${income ? ` (diner paycheck +$${income})` : ''}${interest >= 1 ? `, margin/short interest ${money(interest)}` : ''}.`);
     }
   }
 
-  // ---------------------------------------------------------------- trading
-  function maxBuy(G, t) {
-    const st = G.stocks[t];
-    if (!st.active) return 0;
-    return Math.max(0, Math.floor((G.cash - commission(G)) / st.price));
+  // margin call: if equity falls below maintenance, the broker force-closes positions (largest first)
+  function checkMargin(G, events) {
+    if (gross(G) <= 0 || equity(G) >= MAINT * gross(G)) return;
+    const closed = [];
+    let guard = 40;
+    while (gross(G) > 0 && equity(G) < MAINT * gross(G) * 1.2 && guard--) {
+      const all = [];
+      for (const t in G.holdings) all.push([t, 'L', G.holdings[t].shares * G.stocks[t].price]);
+      for (const t in G.shorts) all.push([t, 'S', G.shorts[t].shares * G.stocks[t].price]);
+      all.sort((a, b) => b[2] - a[2]);
+      const [t, kind] = all[0];
+      if (kind === 'L') sell(G, t, G.holdings[t].shares, true); else cover(G, t, G.shorts[t].shares, true);
+      closed.push(`${kind === 'L' ? 'sold' : 'covered'} ${t}`);
+    }
+    G.flags.margin = true;
+    const text = `MARGIN CALL! Your account fell below maintenance. The broker force-liquidated your positions (${closed.join(', ')}).`;
+    addNews(G, 'life', text); events.push({ kind: 'margin', text });
   }
-  function buy(G, t, qty) {
+
+  // ---------------------------------------------------------------- trading
+  // Reg-T style: gross exposure (longs + shorts) may not exceed 2x equity. Cash < 0 means margin debt.
+  function maxOpen(G, t) {
     const st = G.stocks[t];
-    qty = Math.floor(qty);
+    if (G.over || !st.active) return 0;
+    const q = (2 * (equity(G) - commission(G)) - gross(G)) / st.price;
+    return Math.max(0, Math.floor(q + 1e-9));
+  }
+  const maxBuy = (G, t) => (G.shorts[t] ? 0 : maxOpen(G, t));
+  const maxShort = (G, t) => (G.holdings[t] ? 0 : maxOpen(G, t));
+
+  function buy(G, t, qty) {
+    const st = G.stocks[t]; qty = Math.floor(qty);
     if (G.over || !st.active || qty < 1) return { ok: false, msg: 'Invalid order.' };
-    const c = commission(G), cost = qty * st.price + c;
-    if (cost > G.cash + 1e-9) return { ok: false, msg: 'Not enough cash (incl. $' + c + ' commission).' };
-    G.cash -= cost; G.stats.fees += c; G.stats.trades++;
+    if (G.shorts[t]) return { ok: false, msg: `You're short ${t}. Cover first.` };
+    if (qty > maxOpen(G, t)) return { ok: false, msg: 'Not enough buying power (margin limit 2x equity).' };
+    const c = commission(G);
+    G.cash -= qty * st.price + c; G.stats.fees += c; G.stats.trades++;
     const h = G.holdings[t] || (G.holdings[t] = { shares: 0, cost: 0 });
     h.cost = (h.cost * h.shares + qty * st.price) / (h.shares + qty);
     h.shares += qty;
-    return { ok: true, msg: `Bought ${qty} ${t} @ $${st.price.toFixed(2)}` };
+    return { ok: true, msg: `Bought ${qty} ${t} @ $${st.price.toFixed(2)}${G.cash < 0 ? ' (on margin)' : ''}` };
   }
   function sell(G, t, qty, quiet) {
-    const st = G.stocks[t], h = G.holdings[t];
-    qty = Math.floor(qty);
-    if (!h || qty < 1 || qty > h.shares) return { ok: false, msg: 'You don\'t own that many shares.' };
+    const st = G.stocks[t], h = G.holdings[t]; qty = Math.floor(qty);
+    if (!h || qty < 1 || qty > h.shares) return { ok: false, msg: "You don't own that many shares." };
     const c = quiet ? 0 : commission(G);
-    const proceeds = qty * st.price - c;
-    if (G.cash + proceeds < 0) return { ok: false, msg: 'Sale too small to cover the $' + c + ' commission.' };
-    G.cash += proceeds; G.stats.fees += c; G.stats.trades++;
-    G.stats.realized += (st.price - h.cost) * qty - c;
+    if (!quiet && G.cash + qty * st.price - c < 0 && qty * st.price - c < 0) return { ok: false, msg: 'Sale too small to cover the $' + c + ' commission.' };
+    G.cash += qty * st.price - c; G.stats.fees += c; G.stats.trades++;
+    realize(G, (st.price - h.cost) * qty - c);
+    if (st.price / h.cost >= 5) G.flags.tenx = true;
     h.shares -= qty;
     if (h.shares === 0) delete G.holdings[t];
     return { ok: true, msg: `Sold ${qty} ${t} @ $${st.price.toFixed(2)}` };
+  }
+  function short(G, t, qty) {
+    const st = G.stocks[t]; qty = Math.floor(qty);
+    if (G.over || !st.active || qty < 1) return { ok: false, msg: 'Invalid order.' };
+    if (G.holdings[t]) return { ok: false, msg: `You own ${t}. Sell your shares first.` };
+    if (qty > maxOpen(G, t)) return { ok: false, msg: 'Not enough margin to short that much (limit 2x equity).' };
+    const c = commission(G);
+    G.cash += qty * st.price - c; G.stats.fees += c; G.stats.trades++;
+    const sh = G.shorts[t] || (G.shorts[t] = { shares: 0, entry: 0 });
+    sh.entry = (sh.entry * sh.shares + qty * st.price) / (sh.shares + qty);
+    sh.shares += qty;
+    return { ok: true, msg: `Shorted ${qty} ${t} @ $${st.price.toFixed(2)}` };
+  }
+  function cover(G, t, qty, quiet) {
+    const st = G.stocks[t], sh = G.shorts[t]; qty = Math.floor(qty);
+    if (!sh || qty < 1 || qty > sh.shares) return { ok: false, msg: "You're not short that many shares." };
+    const c = quiet ? 0 : commission(G);
+    G.cash -= qty * st.price + c; G.stats.fees += c; G.stats.trades++;
+    const gain = (sh.entry - st.price) * qty - c;
+    realize(G, gain); if (gain > 0) G.flags.shortWin = true;
+    sh.shares -= qty;
+    if (sh.shares === 0) delete G.shorts[t];
+    return { ok: true, msg: `Covered ${qty} ${t} @ $${st.price.toFixed(2)}` };
+  }
+
+  // ---------------------------------------------------------------- achievements
+  const ACH = [
+    { id: 'first', emoji: '🧾', name: 'First Trade', desc: 'Make your first trade.', test: (G) => G.stats.trades >= 1 },
+    { id: 'nw25k', emoji: '🌱', name: 'In the Green', desc: 'Reach $25,000 net worth.', test: (G) => netWorth(G) >= 25e3 },
+    { id: 'nw100k', emoji: '💵', name: 'Six Figures', desc: 'Reach $100,000 net worth.', test: (G) => netWorth(G) >= 1e5 },
+    { id: 'nw1m', emoji: '🤑', name: 'Millionaire', desc: 'Reach $1,000,000 net worth.', test: (G) => netWorth(G) >= 1e6 },
+    { id: 'nw10m', emoji: '👑', name: 'Master of the Universe', desc: 'Reach $10,000,000 net worth.', test: (G) => netWorth(G) >= 1e7 },
+    { id: 'condo', emoji: '🏙️', name: 'Moving On Up', desc: 'Move into a Yuppie Condo or better.', test: (G) => G.home >= 2 },
+    { id: 'rolex', emoji: '⌚', name: 'Time Is Money', desc: 'Buy the Rolex.', test: (G) => G.lux.includes('rolex') },
+    { id: 'mansion', emoji: '🏰', name: 'Lifestyles of the Rich', desc: 'Live in the Hamptons mansion.', test: (G) => G.home === 5 },
+    { id: 'jet', emoji: '🛩️', name: 'Frequent Flyer', desc: 'Own a private jet share.', test: (G) => G.lux.includes('jet') },
+    { id: 'short', emoji: '🐻', name: 'Bear Necessities', desc: 'Close a profitable short.', test: (G) => G.flags.shortWin },
+    { id: 'tenx', emoji: '🚀', name: 'To the Moon', desc: 'Sell a stock at 5x your cost.', test: (G) => G.flags.tenx },
+    { id: 'margin', emoji: '📞', name: 'Leverage Is a Hell of a Drug', desc: 'Get a margin call.', test: (G) => G.flags.margin },
+    { id: 'bust', emoji: '💥', name: 'Pets.com Victim', desc: 'Lose $10,000+ on a bankrupt stock.', test: (G) => G.flags.bust },
+    { id: 'insider', emoji: '🤫', name: 'Gekko Wannabe', desc: 'Profit from an insider tip.', test: (G) => G.flags.insiderWin },
+    { id: 'sec', emoji: '⚖️', name: 'Boesky Moment', desc: 'Get fined by the SEC.', test: (G) => G.flags.fined },
+    { id: 'prison', emoji: '⛓️', name: 'Club Fed', desc: 'Go to federal prison.', test: (G) => G.over === 'prison' },
+    { id: 'tax', emoji: '🏛️', name: 'Uncle Sam Thanks You', desc: 'Pay $10,000+ in capital-gains tax.', test: (G) => (G.flags.taxPaid || 0) >= 1e4 },
+    { id: 'comeback', emoji: '🔥', name: 'Comeback Kid', desc: 'Fall below $500, then climb back above $50,000.', test: (G) => G.flags.low && netWorth(G) >= 5e4 },
+    { id: 'rock', emoji: '🥫', name: 'Rock Bottom', desc: 'End up homeless.', test: (G) => G.over === 'homeless' },
+    { id: 'y2k', emoji: '🎆', name: 'Y2K Survivor', desc: 'Make it to the end of the decade.', test: (G) => G.over === 'end' },
+    { id: 'index', emoji: '📊', name: 'Slow and Steady', desc: 'Finish the game holding $10,000+ of the Index Fund.', test: (G) => G.over === 'end' && G.holdings.IDX && G.holdings.IDX.shares * G.stocks.IDX.price >= 1e4 },
+  ];
+  function checkAchievements(G) {
+    const fresh = [];
+    for (const a of ACH) {
+      if (G.ach[a.id]) continue;
+      let ok = false; try { ok = !!a.test(G); } catch (e) {}
+      if (ok) { G.ach[a.id] = G.week; fresh.push(a); }
+    }
+    return fresh;
   }
 
   // ---------------------------------------------------------------- lifestyle
@@ -431,9 +621,11 @@
   }
 
   const api = {
-    START_CASH, SELL_RATIO, STOCKS, HOMES, CARS, TECH, LUX, RANKS,
-    newGame, advanceWeek, buy, sell, maxBuy, buyItem, sellItem, moveHome,
-    netWorth, stockValue, assetValue, monthlyCosts, monthlyIncome, commission, rankOf, dateOf, livingCost,
+    START_CASH, SELL_RATIO, SAVE_VERSION, TAX_RATE, MARGIN_RATE, MAINT, STOCKS, HOMES, CARS, TECH, LUX, RANKS, ACH,
+    newGame, advanceWeek, buy, sell, short, cover, maxBuy, maxShort, buyItem, sellItem, moveHome,
+    acceptOffer, declineOffer, checkAchievements,
+    netWorth, stockValue, shortValue, assetValue, gross, equity, marginDebt, marginLevel,
+    monthlyCosts, monthlyIncome, commission, rankOf, dateOf, livingCost,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;

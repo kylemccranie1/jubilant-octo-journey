@@ -82,3 +82,9 @@ h2{font-size:12px;text-transform:uppercase;letter-spacing:1.5px;color:var(--dim)
 .title-card p{color:var(--dim);line-height:1.5;margin:18px 0 26px;font-size:14px}
 button.big{display:block;width:100%;margin-bottom:10px;padding:16px;font-size:18px}
 .title-card small{color:var(--dim);font-style:italic}
+
+button.short{background:#7a2ca0;border:0}
+button.mute{background:none;border:0;padding:0 2px;font-size:15px;vertical-align:middle}
+.offer-card{border-color:var(--pink);background:#2a0f2e;animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{50%{box-shadow:0 0 12px var(--pink)}}
+#tabs button{font-size:10px}

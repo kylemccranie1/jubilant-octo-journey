@@ -1,0 +1,22 @@
+{
+  "name": "wall-street-90",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A 1990s stock trading game for mobile",
+  "scripts": {
+    "test": "node test/sim.js",
+    "serve": "python3 -m http.server 8000",
+    "build:web": "node scripts/build-web.js",
+    "cap:android": "npm run build:web && npx cap add android && npx cap sync android",
+    "cap:ios": "npm run build:web && npx cap add ios && npx cap sync ios",
+    "cap:sync": "npm run build:web && npx cap sync"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/core": "^6.0.0",
+    "@capacitor/ios": "^6.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.0.0"
+  }
+}
