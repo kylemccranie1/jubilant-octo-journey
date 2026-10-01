@@ -71,6 +71,9 @@ class Backtester:
         broker.on_fill = on_fill
 
         strat.on_start(ctx)
+        if len(stream):
+            # Starting balance, dated the day before the first bar, so day one's P&L counts.
+            ctx.equity_curve.append((stream.index[0].date() - pd.Timedelta(days=1), broker.account.equity()))
         cur_day = None
         cols = stream.columns.get_indexer(["open", "high", "low", "close", "volume", "session", "symbol"])
         values = stream.to_numpy()

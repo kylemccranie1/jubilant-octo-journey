@@ -1,8 +1,7 @@
 # trade-sim
 
-A paper trading simulator that copies how Robinhood handles stock orders, plus a
-research harness for level-based strategies. It never connects to a brokerage and
-never places real orders. Market data comes from Alpaca's data API (consolidated SIP feed, free for history).
+A paper trading simulator that copies how Robinhood handles stock orders. It never
+connects to a brokerage and never places real orders. Market data comes from Alpaca's data API (consolidated SIP feed, free for history).
 
 ## What it models
 
@@ -15,75 +14,52 @@ never places real orders. Market data comes from Alpaca's data API (consolidated
 | Fills | Marketable orders pay ~24.5% of the half-spread (Robinhood's reported price improvement); limits need a trade *through* the price; stops pay a full half-spread or fill at the open on a gap; size capped at 10% of bar volume; a bar that hits both stop and target counts as the stop |
 | Fees | $0 commission; SEC $20.60/$1M on sells (waived ≤ $500); FINRA TAF $0.000195/share on sells (cap $9.79, waived ≤ 50 shares); CAT $0.000003/share |
 | Cash account | Long only, settled cash only, T+1 settlement |
-| Margin account | $2,000 minimum for leverage and shorts; Reg T 50% initial; no pattern day trader limit (removed June 2026); shorts are day orders, whole shares, not overnight; borrow fees and margin interest accrue daily; maintenance deficit triggers liquidation |
+| Margin account | $2,000 minimum for leverage and shorts; Reg T 50% initial; no pattern day trader limit (removed June 2026); orders that open a short are good-for-day and whole shares (short positions can be held overnight); borrow fees and margin interest accrue daily; maintenance deficit triggers liquidation |
 
 Assumptions that weren't confirmed against a Robinhood source are marked in the code
 (maintenance percentages, margin and borrow rates, fractional order types).
 `docs/robinhood-research.md` has the sourced research.
-
-## Strategies
-
-`trade_sim/strategies/level_trader.py`
-
-* **DailyWeeklyLevels**: previous day and week highs and lows.
-* **SupportResistance**: zones where price was tested and rejected at least twice on
-  1-hour and 4-hour bars over the last ~20 trading days (swing points clustered by price).
-
-Each can **fade** the level (bet it holds), trade the **break**, or be **vol_gated**
-(fade when the 14-day ATR is below its 1-year median, break when above). Exits are
-parameters: ATR-based stop and target, flatten at 15:55, or hold up to N days.
-
-Every trade records a feature snapshot at entry (ATR percentile, realized vol, gap,
-trend, relative volume, time of day, level type, zone touches/width/age...).
-`trade_sim.analysis.filter_report` then shows results for each feature bucket, with
-buckets fit on the first 70% of trades and checked on the last 30%. That is how to see
-whether a metric layered on top of level trading actually improves outcomes.
 
 ## Usage
 
 ```bash
 pip install -r requirements.txt
 python -m pytest
-
-# Synthetic data (no API keys needed; it has no edge, so results should hover around zero)
-python run_backtest.py --synthetic --strategy daily_weekly --mode vol_gated --regular-only
-
-# Real data (needs ALPACA_API_KEY and ALPACA_SECRET_KEY; uses the SIP feed by default,
-# which the free plan allows for anything older than 15 minutes)
-python run_backtest.py --symbol SPY --start 2023-01-01 --end 2026-09-01 \
-    --strategy sr_zones --mode fade --account margin --stop-atr 0.5 --target-atr 1.0
 ```
 
-Results go to `results/` (trade journal CSV and filter report CSV).
+A strategy subclasses `trade_sim.engine.Strategy` and submits orders to the broker from
+`on_bar`; the engine fills orders that were working before each bar, then shows the
+strategy the completed bar. Positions still open when the data ends are closed at the last
+price (tagged `end_of_data`).
 
-To run every symbol × strategy × mode and pool the trades across symbols (a single
-symbol rarely has enough trades for its 30% test slice to mean much):
+```python
+from trade_sim.account import Account, AccountType
+from trade_sim.analysis import equity_stats, summarize
+from trade_sim.broker import PaperBroker
+from trade_sim.calendar import Session, TradingCalendar
+from trade_sim.data import synthetic_minute_bars          # or trade_sim.data.alpaca.fetch_bars
+from trade_sim.engine import Backtester, Strategy
+from trade_sim.orders import Order, OrderType, Side
 
-```bash
-# Last year only; bars from --start to --trade-start just warm up ATR, percentiles and zones
-python run_grid.py --symbols SPY QQQ AAPL MSFT NVDA AMZN --start 2025-06-02 --trade-start 2025-09-29 \
-    --end 2026-09-29 --regular-only
-python run_grid.py --synthetic --symbols A B C --regular-only   # smoke test, no keys
+class BuyOnce(Strategy):
+    def __init__(self):
+        self.done = False
+
+    def on_bar(self, ctx, symbol, bar):
+        if not self.done and bar.session == Session.REGULAR:
+            ctx.broker.submit(Order(symbol, Side.BUY, OrderType.MARKET, qty=10), bar.ts)
+            self.done = True
+
+bars = synthetic_minute_bars("2024-01-01", "2024-03-29", seed=0)
+broker = PaperBroker(Account(AccountType.MARGIN, cash=25_000), TradingCalendar())
+ctx = Backtester(broker, BuyOnce(), {"SYN": bars}).run()
+print(summarize(ctx.tracker.to_frame()), equity_stats(ctx.equity_curve))
 ```
 
-It writes per-run trade journals, `summary.csv`, `pooled_summary.csv`, and for each
-strategy/mode a pooled filter report plus a digest where `holds` marks feature buckets
-that beat the baseline's average R in both train and test. The summary's
-`unexplained_pnl` column should stay within a few dollars of borrow fees; anything larger
-means a position was left open or the ledger is off.
-
-To compare exits on the same entries (ranked on the first ~70% of the year, judged on the rest):
-
-```bash
-python run_exits.py --stops 0.15 0.25 0.5 1.0 --targets 0.25 0.5 1 0     # 0 = no target
-python run_exits.py --configs '[{"stop_atr": 0.5, "target_atr": 0, "trail_atr": 0.5},
-                                {"stop_atr": 0.5, "target_atr": 1, "breakeven_atr": 0.3},
-                                {"stop_atr": 0.5, "target_atr": 1, "time_stop_min": 60}]'
-```
-
-Exit settings (all in daily ATRs): `stop_atr`, `target_atr` (0 = none), `trail_atr` (trailing
-stop alongside the fixed stop), `breakeven_atr` (move the stop to entry once this far ahead),
-`time_stop_min` (exit after N minutes), `hold_days` (0 = flatten at 15:55).
+Real data: `trade_sim.data.alpaca.fetch_bars(symbol, start, end, feed="sip")` needs
+`ALPACA_API_KEY` and `ALPACA_SECRET_KEY`. The free plan allows the consolidated SIP feed for
+anything older than 15 minutes; requests are clamped accordingly. `trade_sim.data.save_csv` /
+`load_csv` cache downloads.
 
 ## Layout
 
@@ -97,8 +73,7 @@ trade_sim/
   broker.py       order validation, queuing, expiry, OCO, fills
   engine.py       backtest loop and Strategy interface
   trades.py       round-trip trade journal with MAE/MFE and features
-  levels.py       daily/weekly levels, ATR, support/resistance zones
-  analysis.py     summary stats and filter report
+  analysis.py     summary stats for a trade journal and equity curve
   data/           Alpaca adapter, CSV cache, synthetic data
 ```
 

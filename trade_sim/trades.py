@@ -1,7 +1,7 @@
 """Round-trip trade journal built from fills.
 
 A trade opens when a position leaves zero and closes when it returns to zero. The
-strategy can attach a feature snapshot (volatility, level type, ...) at entry so that
+strategy can attach a feature snapshot (any metrics it likes) at entry so that
 filters can be evaluated later, and the tracker records the maximum adverse and
 favourable excursion (MAE/MFE) while the trade is open to help design exits.
 """

@@ -1,10 +1,4 @@
-"""Compare a baseline strategy with filtered versions of it.
-
-The question this answers: "if I only took the level trades where metric X was in
-range Y, would results have been better?" Buckets are defined on the training period
-only and then checked on the later test period, so a filter that only fits noise shows
-up as a winner in-sample and a loser out-of-sample.
-"""
+"""Performance summaries for a trade journal (TradeTracker.to_frame()) and an equity curve."""
 from __future__ import annotations
 
 import numpy as np
@@ -38,64 +32,3 @@ def equity_stats(equity_curve: list[tuple]) -> dict:
     return {"start_equity": round(s.iloc[0], 2), "end_equity": round(s.iloc[-1], 2),
             "total_return_pct": round(100 * (s.iloc[-1] / s.iloc[0] - 1), 2),
             "max_drawdown_pct": round(100 * dd, 2), "sharpe": round(sharpe, 2)}
-
-
-def filter_report(trades: pd.DataFrame, split=None, buckets: int = 3) -> pd.DataFrame:
-    """For every f_* feature column, stats per bucket in the train and test periods.
-
-    split: timestamp separating train (before) from test (after). Defaults to the 70th
-    percentile of entry times.
-    """
-    if trades.empty:
-        return pd.DataFrame()
-    t = trades.sort_values("entry_ts")
-    if split is None:
-        split = t["entry_ts"].iloc[int(len(t) * 0.7)]
-    train, test = t[t["entry_ts"] < split], t[t["entry_ts"] >= split]
-    rows = []
-    for col in [c for c in t.columns if c.startswith("f_")]:
-        name = col[2:]
-        if pd.api.types.is_numeric_dtype(t[col]) and t[col].nunique() > buckets:
-            edges = np.unique(np.nanquantile(train[col].dropna(), np.linspace(0, 1, buckets + 1)))
-            if len(edges) < 3:
-                continue
-            edges[0], edges[-1] = -np.inf, np.inf
-            label = lambda df: pd.cut(df[col], edges, duplicates="drop").astype(str)
-        else:
-            label = lambda df: df[col].astype(str)
-        for period, df in (("train", train), ("test", test)):
-            if df.empty:
-                continue
-            for bucket, g in df.groupby(label(df)):
-                s = summarize(g)
-                rows.append({"feature": name, "bucket": bucket, "period": period, **s})
-    base = []
-    for period, df in (("train", train), ("test", test)):
-        base.append({"feature": "(baseline)", "bucket": "all", "period": period, **summarize(df)})
-    return pd.DataFrame(base + rows)
-
-
-def filter_digest(report: pd.DataFrame, metric: str = "avg_r", min_trades: int = 30) -> pd.DataFrame:
-    """One row per feature bucket: how much it beat the baseline in train and in test.
-
-    `holds` marks buckets that beat the baseline in both periods with at least
-    `min_trades` trades in each, the filters worth a closer look.
-    """
-    if report.empty:
-        return pd.DataFrame()
-    base = report[report["feature"] == "(baseline)"].set_index("period")[metric]
-    rows = report[report["feature"] != "(baseline)"]
-    wide = rows.pivot_table(index=["feature", "bucket"], columns="period", values=[metric, "trades"], aggfunc="first")
-    wide.columns = [f"{p}_{m}" for m, p in wide.columns]
-    wide = wide.reset_index()
-    for p in ("train", "test"):
-        if f"{p}_{metric}" not in wide:
-            wide[f"{p}_{metric}"] = np.nan
-            wide[f"{p}_trades"] = 0
-        wide[f"{p}_trades"] = wide[f"{p}_trades"].fillna(0).astype(int)
-        wide[f"{p}_vs_base"] = wide[f"{p}_{metric}"] - base.get(p, np.nan)
-    wide["holds"] = ((wide["train_vs_base"] > 0) & (wide["test_vs_base"] > 0) &
-                     (wide["train_trades"] >= min_trades) & (wide["test_trades"] >= min_trades))
-    cols = ["feature", "bucket", "train_trades", f"train_{metric}", "train_vs_base",
-            "test_trades", f"test_{metric}", "test_vs_base", "holds"]
-    return wide[cols].sort_values(["holds", "test_vs_base"], ascending=False).reset_index(drop=True)
