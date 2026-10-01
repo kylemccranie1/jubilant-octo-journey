@@ -12,18 +12,29 @@ Plain HTML/JS, no build step. Plays in a phone browser; "Add to Home Screen" for
 ## How it works
 
 - **Time:** one turn = one week, Jan 1990 → Dec 2000. "+1 Month" skips ahead and stops on big news.
-- **Market:** 15 fictional stocks (dot-coms IPO in 1995–99). Real-history events move the market: Gulf War, 1994 bond crash, Asian crisis, LTCM, the dot-com crash.
-- **Company news:** earnings, lawsuits, takeovers, FDA decisions. Stocks can split or go bankrupt (shares become worthless).
-- **Lifestyle:** buy homes, cars, trading gear and status symbols. Better gear = cheaper commissions + weekly tips.
-- **Bills:** rent, living costs and upkeep come due monthly. If you can't pay, the broker sells stock, the repo man takes your stuff, then you're evicted. Out of options = homeless, game over.
+- **Market:** 15 stocks + a low-risk **Index Fund** (IDX). Dot-coms IPO in 1995–99. Real-history events move the market: Gulf War, 1994 bond crash, Asian crisis, LTCM, the dot-com crash. Random company news, splits and bankruptcies.
+- **Margin & short selling:** buy up to 2x your equity on margin (9% interest) or short a stock (bet it falls). Fall below 25% equity and you get a **margin call** — the broker force-closes your positions. A bankrupt stock pays out your shorts.
+- **Taxes:** 28% capital-gains tax on each year's realized profits, billed in April (losses carry forward).
+- **Insider tips:** once you're making real money, a "friend" may offer a sure thing. Take it and you profit — but the SEC may come knocking. First catch = huge fine, second = **federal prison**.
+- **Lifestyle:** homes, cars, trading gear and status symbols. Better gear = cheaper commissions + weekly tips.
+- **Bills:** rent, living costs, interest and upkeep come due monthly. Can't pay → broker sells stock → repo man → eviction → **homeless**, game over.
+- **Achievements:** 21 trophies that persist across games.
+- **Sound:** synthesized 90s-style effects (no audio files); mute with the 🔊 button.
 - **Saves** automatically in `localStorage`.
 
 ## Code
 
-- `js/engine.js` — pure game logic (market model, trading, lifestyle, bills). Runs in Node.
-- `js/ui.js`, `style.css`, `index.html` — mobile UI.
-- `test/sim.js` — headless balance/sanity simulation: `node test/sim.js`
+- `js/engine.js` — pure game logic (market, trading, margin, tax, insider/SEC, lifestyle, bills, achievements). Runs in Node.
+- `js/ui.js`, `js/sfx.js`, `style.css`, `index.html` — mobile UI and sound.
+- `sw.js`, `manifest.json`, `icons/` — installable PWA that works offline.
+- `test/sim.js` — headless simulation + mechanics tests: `npm test`
 
-## Ideas for next
+## Installable app / app stores (Capacitor)
 
-Short selling & margin, capital-gains tax, an index fund, sound, insider-trading temptation/SEC risk, achievements, app-store packaging (Capacitor).
+The web game is already an installable PWA. To wrap it as a native app:
+
+    npm install
+    npm run cap:android     # or cap:ios (macOS + Xcode required)
+    npx cap open android    # build/sign in Android Studio / Xcode
+
+Change `appId` in `capacitor.config.json` before publishing. Store builds need your own developer accounts, signing keys and store listing assets.
