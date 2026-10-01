@@ -1,0 +1,11 @@
+html,body{margin:0;height:100%;background:#0b1020;overflow:hidden;touch-action:none;
+  -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;
+  font-family:system-ui,sans-serif;color:#fff}
+canvas{display:block;width:100vw;height:100vh;height:100dvh}
+#overlay{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:12px;background:rgba(11,16,32,.8);text-align:center;padding:24px}
+#overlay.hidden{display:none}
+h1{margin:0;font-size:2.4rem;letter-spacing:1px}
+p{margin:0;opacity:.85}
+button{font-size:1.4rem;padding:14px 48px;border:0;border-radius:999px;background:#ffd23f;color:#111;font-weight:700}
+button:active{transform:scale(.96)}
