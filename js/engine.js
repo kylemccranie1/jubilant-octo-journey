@@ -297,13 +297,14 @@
 
   function fillLimit(G, S, ord, lots) {
     applyFill(G, S, ord.side, lots, ord.price, true);
+    S.notes.push(`${ord.side > 0 ? 'BID' : 'OFFER'} filled ${lots} @ ${fmtPrice(S.sym, ord.price)}`);
     S.makerFills = (S.makerFills || 0) + lots;
     pushPrint(S, ord.side, lots, ord.price, 'mine');
   }
 
   const markT = (G) => {
     if (!G.pos) return 0;
-    if (G.sess && G.sess.sym === G.pos.sym) return midOf(G.sess);
+    if (G.sess && G.sess.sym === G.pos.sym) return G.pos.qty > 0 ? G.sess.bid : G.sess.ask;
     return G.mk[G.pos.sym].close;
   };
   function unreal(G) { return G.pos ? (markT(G) - G.pos.entry) * G.pos.qty * CBY[G.pos.sym].tickVal : 0; }
@@ -321,7 +322,7 @@
       sym, n: N, t: 0, open, target: per.closeT, sigT: Math.max(28, open * per.sig),
       bid: open, ask: open + 1, bids: {}, asks: {}, thinA: 1, thinB: 1, imb: 0, volume: 0,
       regime: { f: 0, s: 0, left: 0 }, hint: 0, burst: null, react: null, rev: null, fundJ: 0, totJ: 0,
-      path: [open + 0.5], prints: [], hit: {}, last: open, flowEma: 0, stepFlow: 0, events: [], orders: [], stop: 0, done: false,
+      path: [open + 0.5], prints: [], hit: {}, notes: [], last: open, flowEma: 0, stepFlow: 0, events: [], orders: [], stop: 0, done: false,
       startEq: 0, wins: 0, trades: 0, scripted: !!per.scripted && !!per.text, aheadEntry: null, offer: null, makerFills: 0,
     };
     G.sess = S;
@@ -407,7 +408,7 @@
     for (let i = S.prints.length - 1; i >= 0; i--) { const p = S.prints[i]; if (p[0] <= S.t - w) break; if (p[4] !== 'me' && p[4] !== 'mine') sum += p[1] * p[2]; }
     return sum;
   }
-  const flowGauge = (G) => (G.sess ? clamp(G.sess.flowEma * 8, -1, 1) : 0);
+  const flowGauge = (G) => (G.sess ? clamp(G.sess.flowEma * 5, -1, 1) : 0);
   const shoutsNow = (G, n) => { const S = G.sess; return S ? S.prints.slice(-n).reverse() : []; };
   function ladder(G, k) {
     const S = G.sess; if (!S) return { asks: [], bids: [] };

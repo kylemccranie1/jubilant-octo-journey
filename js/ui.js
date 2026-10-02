@@ -290,6 +290,7 @@
     if (G.sess && !G.sess.done) {
       const sh = E.shoutsNow(G, 1)[0];
       if (sh && sh[0] === S.t && sh[0] !== live.lastShout) { live.lastShout = sh[0]; if (sh[2] >= E.CBY[S.sym].depth * 2) sfx('shout'); }
+      if (G.sess.notes.length) { toast(G.sess.notes.join(' · ')); G.sess.notes.length = 0; sfx('fill'); }
       updateLive();
       const now = Date.now(); if (now - live.lastSave > 4000) { live.lastSave = now; save(); }
     }
@@ -344,7 +345,7 @@
     const open = S.path[0], chg = (mid - open) / open;
     $('pClock').textContent = E.clockOf(t) + ' CT';
     $('pProg').style.width = (t / S.n * 100) + '%';
-    const lastR = Math.round(S.last);
+    const lastR = Math.max(bid, Math.min(ask, Math.round(S.last)));
     if (live.lastR != null && lastR !== live.lastR) { live.flash = { up: lastR > live.lastR, until: performance.now() + 320 }; }
     live.lastR = lastR;
     $('pLast').textContent = fp(sym, lastR);
@@ -357,7 +358,9 @@
     $('pSell').innerHTML = `SELL ${qn}<small>${fp(sym, Math.round(ps.vwap))}${slipTxt(ps)}</small>`;
     // order book ladder
     const L = E.ladder(G, 3), mx = D * 2.5, now = performance.now();
-    const row = (r, k) => `<div class="lv ${k} ${S.hit[r.p] != null && t - S.hit[r.p] <= 1 ? 'hit' : ''}"><span class="lp">${fp(sym, r.p)}</span><span class="lbar"><i style="width:${Math.min(100, r.size / mx * 100)}%"></i></span><span class="ls">${r.size}${r.mine ? `<b> +${r.mine}</b>` : ''}</span></div>`;
+    live.hitUntil = live.hitUntil || {};
+    for (const r of L.asks.concat(L.bids)) if (S.hit[r.p] != null && t - S.hit[r.p] <= 1) live.hitUntil[r.p] = Math.max(live.hitUntil[r.p] || 0, now + 350);
+    const row = (r, k) => `<div class="lv ${k} ${(live.hitUntil[r.p] || 0) > now ? 'hit' : ''}"><span class="lp">${fp(sym, r.p)}</span><span class="lbar"><i style="width:${Math.min(100, r.size / mx * 100)}%"></i></span><span class="ls">${r.size}${r.mine ? `<b> +${r.mine}</b>` : ''}</span></div>`;
     $('pLadder').innerHTML = L.asks.map((r) => row(r, 'a')).join('') + L.bids.map((r) => row(r, 'b')).join('');
     // flow gauge + floor intel
     const norm = E.flowGauge(G);
@@ -368,7 +371,7 @@
     $('pShouts').innerHTML = sh.map((s) => { const mine = s[4] === 'me' || s[4] === 'mine'; return `<div class="sh ${s[1] > 0 ? 'b' : 's'} ${s[2] >= D * 2 ? 'bigsh' : ''} ${mine ? 'mine' : ''}">${mine ? '★ ' : ''}${s[4] === 'block' ? 'PAPER ' : ''}${s[1] > 0 ? 'BUY' : 'SELL'} ${s[2]} <small>${fp(sym, Math.round(s[3]))}</small></div>`; }).join('') || '<div class="sh dim">…quiet…</div>';
     // position
     const p = G.pos, u = E.unreal(G), dayPnl = E.equity(G) - S.startEq;
-    const ords = S.orders.map((o) => `${o.side > 0 ? 'BID' : 'OFFER'} ${o.rem}@${fp(sym, o.price)}`).join(' · ');
+    const ords = S.orders.map((o) => `${o.side > 0 ? 'BID' : 'OFFER'} ${o.rem}@${fp(sym, o.price)} (${o.ahead} ahead)`).join(' · ');
     $('pPos').innerHTML = `<div>${p ? `<b class="${p.qty > 0 ? 'up' : 'down'}">${p.qty > 0 ? 'LONG' : 'SHORT'} ${Math.abs(p.qty)}</b> @ ${fp(sym, p.entry)}` : '<span class="dim">Flat</span>'}</div>
       <div>Open <b class="${cls(u)}">${sgn(u)}</b></div><div>Session <b class="${cls(dayPnl)}">${sgn(dayPnl)}</b></div>
       <div class="dim">${ords || 'Max ' + E.maxLots(G, sym) + ' lots'}</div>`;
@@ -383,17 +386,19 @@
   function drawChart() {
     const S = G.sess, c = cvs(), ctx = c.getContext('2d'), W = c.width, H = c.height, dpr = window.devicePixelRatio || 1;
     ctx.clearRect(0, 0, W, H);
-    const pts = S.path.slice(0, S.t + 1);
+    const pts = S.path.slice(Math.max(0, S.t - Math.min(150, Math.max(40, S.t))), S.t + 1);
     let lo = Math.min(...pts), hi = Math.max(...pts);
     if (G.pos && G.pos.sym === S.sym) { lo = Math.min(lo, G.pos.entry); hi = Math.max(hi, G.pos.entry); }
     const pad = Math.max(3, (hi - lo) * 0.15); lo -= pad; hi += pad;
-    const X = (i) => (i / S.n) * W, Y = (v) => H - ((v - lo) / (hi - lo)) * H;
+    const span = Math.min(150, Math.max(40, S.t)), t0 = Math.max(0, S.t - span);
+    const X = (i) => ((i - t0) / span) * W, Y = (v) => H - ((v - lo) / (hi - lo)) * H;
     ctx.strokeStyle = 'rgba(255,255,255,.06)'; ctx.lineWidth = 1;
     for (let k = 1; k < 4; k++) { ctx.beginPath(); ctx.moveTo(0, H * k / 4); ctx.lineTo(W, H * k / 4); ctx.stroke(); }
     const up = pts[pts.length - 1] >= pts[0], col = up ? '#2dff7a' : '#ff4d5e';
     ctx.lineWidth = 2 * dpr; ctx.strokeStyle = col; ctx.beginPath();
-    pts.forEach((v, i) => (i ? ctx.lineTo(X(i), Y(v)) : ctx.moveTo(X(i), Y(v)))); ctx.stroke();
-    ctx.lineTo(X(pts.length - 1), H); ctx.lineTo(0, H); ctx.fillStyle = up ? 'rgba(45,255,122,.08)' : 'rgba(255,77,94,.08)'; ctx.fill();
+    const base = Math.max(0, S.t - Math.min(150, Math.max(40, S.t)));
+    pts.forEach((v, i) => (i ? ctx.lineTo(X(base + i), Y(v)) : ctx.moveTo(X(base + i), Y(v)))); ctx.stroke();
+    ctx.lineTo(X(base + pts.length - 1), H); ctx.lineTo(0, H); ctx.fillStyle = up ? 'rgba(45,255,122,.08)' : 'rgba(255,77,94,.08)'; ctx.fill();
     ctx.setLineDash([6 * dpr, 4 * dpr]); ctx.lineWidth = 1.5 * dpr;
     if (G.pos && G.pos.sym === S.sym) {
       ctx.strokeStyle = '#ffb800'; ctx.beginPath(); ctx.moveTo(0, Y(G.pos.entry)); ctx.lineTo(W, Y(G.pos.entry)); ctx.stroke();
@@ -402,21 +407,23 @@
     for (const o of S.orders) { ctx.strokeStyle = o.side > 0 ? '#2dff7a' : '#ff4d5e'; ctx.beginPath(); ctx.moveTo(W * 0.6, Y(o.price)); ctx.lineTo(W, Y(o.price)); ctx.stroke(); }
     ctx.setLineDash([]);
     const D = E.CBY[S.sym].depth;
-    for (const pr of S.prints) { // order-flow bubbles: size = lots, color = aggressor side
+    for (const pr of S.prints) { if (pr[0] < t0) continue; // order-flow bubbles: size = lots, color = aggressor side
       const mine = pr[4] === 'me' || pr[4] === 'mine';
       const r = Math.min(11, 2.5 + Math.sqrt(pr[2] / D) * 3.2) * dpr;
       ctx.beginPath(); ctx.arc(X(pr[0]), Y(pr[3]), r, 0, 7);
       if (mine) { ctx.lineWidth = 2.5 * dpr; ctx.strokeStyle = '#ffffff'; ctx.stroke(); }
       else { ctx.fillStyle = pr[1] > 0 ? 'rgba(45,255,122,.45)' : 'rgba(255,77,94,.45)'; ctx.fill(); }
     }
-    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(X(pts.length - 1), Y(pts[pts.length - 1]), 4 * dpr, 0, 7); ctx.fill();
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(X(base + pts.length - 1), Y(pts[pts.length - 1]), 4 * dpr, 0, 7); ctx.fill();
   }
 
   function doTrade(side) {
     if (!G.sess || !live || live.paused || live.modalOpen) return;
     const r = E.trade(G, side, curQty());
     if (!r.ok) { toast(r.msg); sfx('error'); return; }
-    sfx('fill'); buzz(15); updateLive();
+    sfx('fill'); buzz(15);
+    toast(`${side > 0 ? 'Bought' : 'Sold'} ${r.filled} @ ${fp(G.sess.sym, Math.round(r.px))}${r.slip >= 0.5 ? ` (${r.slip.toFixed(1)}t slip)` : ''}`);
+    updateLive();
   }
 
   async function skipToClose() {
@@ -463,7 +470,7 @@
       const r = t.dataset.buy ? E.buyItem(G, cat, key) : E.sellItem(G, cat, key);
       toast(r.msg); sfx(r.ok ? 'buy' : 'error'); if (r.ok) { buzz(20); noteAch(E.checkAchievements(G)); save(); } render(); return;
     }
-    if (t.dataset.lq) { live.qty = t.dataset.lq === 'MAX' ? 'MAX' : +t.dataset.lq; buildQty(); sfx('tap'); return; }
+    if (t.dataset.lq) { live.qty = t.dataset.lq === 'MAX' ? 'MAX' : +t.dataset.lq; buildQty(); sfx('tap'); if (G.sess) updateLive(); return; }
   });
   // trading buttons react on press for speed
   const press = (id, fn) => $(id).addEventListener('pointerdown', (e) => { e.preventDefault(); fn(); });

@@ -141,3 +141,10 @@ body.live #toast{top:calc(96px + var(--sat));bottom:auto;pointer-events:none}
 .row-btns button{min-height:38px}
 button.big2{padding:10px 0;font-size:20px;min-height:54px}
 .banner{position:absolute;left:12px;right:12px;top:96px;z-index:3}
+
+/* ---- round-2 playtest fixes ---- */
+.pit-btns button{min-height:44px;min-width:48px}
+.chips button{min-height:42px}.row-btns button{min-height:42px}
+#pGauge{font-size:11px}.sh small{font-size:11px}
+#pPos div:last-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media (max-height:700px){#pShouts{max-height:70px}#pShouts .sh:nth-child(n+4){display:none}.lv{height:13px}.pit-pos{padding:5px 8px}button.big2{min-height:48px;padding:6px 0}.chips button,.row-btns button{min-height:38px}}
