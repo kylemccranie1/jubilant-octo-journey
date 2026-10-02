@@ -127,3 +127,17 @@ button.big2{padding:16px 0;font-size:22px;font-weight:800;touch-action:manipulat
 .g-bar::after{content:"";position:absolute;left:50%;top:0;width:1px;height:100%;background:#fff6}
 .hint{color:var(--amber);min-width:54px;text-align:right}
 button.big2 small{font-size:11px}
+
+/* ---- order-flow legibility + small-phone fixes ---- */
+.lv.hit{background:rgba(255,184,0,.28);border-radius:3px}
+#pLast.fup{color:var(--up)}#pLast.fdown{color:var(--down)}
+body.live #toast{top:calc(96px + var(--sat));bottom:auto;pointer-events:none}
+#pit{gap:5px}
+#pChart{min-height:110px}
+.lv{height:15px}
+#pShouts{font-size:12px;max-height:104px}
+.sh{padding:0 6px}
+.pit-pos{grid-template-columns:1fr 1fr;gap:3px 8px;font-size:12px}
+.row-btns button{min-height:38px}
+button.big2{padding:10px 0;font-size:20px;min-height:54px}
+.banner{position:absolute;left:12px;right:12px;top:96px;z-index:3}

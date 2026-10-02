@@ -259,7 +259,7 @@
   function enterLive(resumePaused) {
     live = { timer: null, speed: 1, paused: false, qty: 1, stopIdx: 0, lastSave: 0, bannerTimer: null, modalOpen: false, lastShout: -1 };
     if (G.sess.stop) live.stopIdx = Math.max(0, STOPS.indexOf(G.sess.stop));
-    $('pit').classList.remove('hidden');
+    $('pit').classList.remove('hidden'); document.body.classList.add('live');
     $('pName').textContent = `${E.CBY[G.sess.sym].emoji} ${E.CBY[G.sess.sym].name}`;
     buildQty(); sizeCanvas(); updateLive();
     save();
@@ -289,7 +289,7 @@
     handleLiveEvents(evs);
     if (G.sess && !G.sess.done) {
       const sh = E.shoutsNow(G, 1)[0];
-      if (sh && sh[0] === S.t && sh[0] !== live.lastShout) { live.lastShout = sh[0]; if (sh[2] >= 50) sfx('shout'); }
+      if (sh && sh[0] === S.t && sh[0] !== live.lastShout) { live.lastShout = sh[0]; if (sh[2] >= E.CBY[S.sym].depth * 2) sfx('shout'); }
       updateLive();
       const now = Date.now(); if (now - live.lastSave > 4000) { live.lastSave = now; save(); }
     }
@@ -312,7 +312,7 @@
     const o = G.sess.offer;
     const i = await showModal({
       title: '📞 Paper in the pit!',
-      body: `<p>${e.text}</p><p class="dim" style="font-size:12px">Trading ahead of a customer is illegal. If you profit, compliance might notice: first time is a big fine, second is <b>prison</b>. You have about 4 seconds before the order hits.</p>`,
+      body: `<p>${e.text}</p><p class="dim" style="font-size:12px">Trading ahead of a customer is illegal. If you profit, compliance might notice: first time is a big fine, second is <b>prison</b>. The order hits the book about 4 seconds after you decide.</p>`,
       buttons: [[`Fill it fairly (+${money(o.bonus)})`, ''], ['Trade ahead 🤫', 'primary']],
     });
     const r = E.respondOffer(G, i === 1 ? 'ahead' : 'honest');
@@ -323,7 +323,7 @@
 
   async function leaveLive(evs) {
     stopTimer(); live.modalOpen = true;
-    $('pit').classList.add('hidden'); live = null;
+    $('pit').classList.add('hidden'); document.body.classList.remove('live'); live = null;
     busy = true;
     await afterEvents(evs.filter((e) => !['headline', 'stop', 'offer'].includes(e.kind)));
   }
@@ -344,7 +344,11 @@
     const open = S.path[0], chg = (mid - open) / open;
     $('pClock').textContent = E.clockOf(t) + ' CT';
     $('pProg').style.width = (t / S.n * 100) + '%';
-    $('pLast').textContent = fp(sym, Math.round(S.last));
+    const lastR = Math.round(S.last);
+    if (live.lastR != null && lastR !== live.lastR) { live.flash = { up: lastR > live.lastR, until: performance.now() + 320 }; }
+    live.lastR = lastR;
+    $('pLast').textContent = fp(sym, lastR);
+    $('pLast').className = 'mono' + (live.flash && live.flash.until > performance.now() ? (live.flash.up ? ' fup' : ' fdown') : '');
     $('pChg').textContent = pct(chg); $('pChg').className = 'mono ' + (chg >= 0 ? 'up' : 'down');
     $('pBA').textContent = `${fp(sym, bid)} × ${fp(sym, ask)}`;
     const qn = curQty(), pb = E.preview(G, 1, qn), ps = E.preview(G, -1, qn);
@@ -352,15 +356,15 @@
     $('pBuy').innerHTML = `BUY ${qn}<small>${fp(sym, Math.round(pb.vwap))}${slipTxt(pb)}</small>`;
     $('pSell').innerHTML = `SELL ${qn}<small>${fp(sym, Math.round(ps.vwap))}${slipTxt(ps)}</small>`;
     // order book ladder
-    const L = E.ladder(G, 3), mx = D * 2.5;
-    const row = (r, k) => `<div class="lv ${k}"><span class="lp">${fp(sym, r.p)}</span><span class="lbar"><i style="width:${Math.min(100, r.size / mx * 100)}%"></i></span><span class="ls">${r.size}${r.mine ? `<b> +${r.mine}</b>` : ''}</span></div>`;
+    const L = E.ladder(G, 3), mx = D * 2.5, now = performance.now();
+    const row = (r, k) => `<div class="lv ${k} ${S.hit[r.p] != null && t - S.hit[r.p] <= 1 ? 'hit' : ''}"><span class="lp">${fp(sym, r.p)}</span><span class="lbar"><i style="width:${Math.min(100, r.size / mx * 100)}%"></i></span><span class="ls">${r.size}${r.mine ? `<b> +${r.mine}</b>` : ''}</span></div>`;
     $('pLadder').innerHTML = L.asks.map((r) => row(r, 'a')).join('') + L.bids.map((r) => row(r, 'b')).join('');
     // flow gauge + floor intel
-    const flow = E.recentFlow(G, 30), norm = Math.max(-1, Math.min(1, flow / (D * 6)));
+    const norm = E.flowGauge(G);
     $('pGaugeFill').style.cssText = norm >= 0 ? `left:50%;width:${norm * 50}%;background:var(--up)` : `left:${50 + norm * 50}%;width:${-norm * 50}%;background:var(--down)`;
     $('pHint').textContent = G.tech >= 1 ? 'Intel ' + (S.hint > 0 ? '▲' : S.hint < 0 ? '▼' : '–') : '';
     // shouts
-    const sh = E.shoutsNow(G, 7);
+    const sh = E.shoutsNow(G, 40).filter((s) => s[2] >= Math.max(2, D * 0.5) || s[4] === 'me' || s[4] === 'mine' || s[4] === 'block').slice(0, 6);
     $('pShouts').innerHTML = sh.map((s) => { const mine = s[4] === 'me' || s[4] === 'mine'; return `<div class="sh ${s[1] > 0 ? 'b' : 's'} ${s[2] >= D * 2 ? 'bigsh' : ''} ${mine ? 'mine' : ''}">${mine ? '★ ' : ''}${s[4] === 'block' ? 'PAPER ' : ''}${s[1] > 0 ? 'BUY' : 'SELL'} ${s[2]} <small>${fp(sym, Math.round(s[3]))}</small></div>`; }).join('') || '<div class="sh dim">…quiet…</div>';
     // position
     const p = G.pos, u = E.unreal(G), dayPnl = E.equity(G) - S.startEq;

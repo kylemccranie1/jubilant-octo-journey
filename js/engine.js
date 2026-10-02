@@ -219,11 +219,11 @@
   // resting limit orders sit in the queue and get filled as the crowd trades through them.
   const SIZE_F = [0.25, 0.5, 1, 2, 4], SIZE_W = [0.33, 0.30, 0.22, 0.10, 0.05];
   const SHOUT_RATE = 0.35;   // expected crowd orders per step
-  const REG_BIAS = 0.17;     // buy-probability tilt of an informed-flow regime
+  const REG_BIAS = 0.22;     // buy-probability tilt of an informed-flow regime
   const MAX_PRINTS = 80;
 
   const dpth = (S) => CBY[S.sym].depth;
-  function freshQty(G, S, thin) { return Math.max(1, Math.round(dpth(S) * (0.5 + rnd(G)) * (thin == null ? 1 : thin))); }
+  function freshQty(G, S, thin) { return Math.max(1, Math.round(dpth(S) * (0.35 + 0.8 * rnd(G)) * (thin == null ? 1 : thin))); }
   function ensureLevel(G, S, key, p) {
     const book = S[key];
     if (!(book[p] > 0)) book[p] = freshQty(G, S, key === 'asks' ? S.thinA : S.thinB);
@@ -254,6 +254,7 @@
       const taken = tA + tM + tB;
       if (ord) { ord.ahead = ahead - tA; ord.rem -= tM; }
       book[P] = L - tA - tB;
+      if (taken > 0) S.hit[P] = S.t;
       if (tM > 0) fillLimit(G, S, ord, tM);
       cost += taken * P; filled += taken; rem -= taken;
       if (book[P] <= 0 && (!ord || ord.rem <= 0)) { // level cleared: the price steps
@@ -263,7 +264,7 @@
       }
     }
     const vwap = filled ? cost / filled : (side > 0 ? S.ask : S.bid);
-    if (filled) { pushPrint(S, side, filled, vwap, who); S.volume += filled; S.last = vwap; }
+    if (filled) { pushPrint(S, side, filled, vwap, who); S.volume += filled; S.last = vwap; if (who === 'pit' || who === 'block') S.stepFlow += side * filled; }
     S.orders = S.orders.filter((o) => o.rem > 0);
     return { filled, vwap };
   }
@@ -307,6 +308,7 @@
   const equity = (G) => G.cash + unreal(G);
   const maxLots = (G, sym) => Math.max(0, Math.floor(equity(G) / CBY[sym].margin + 1e-9));
 
+  const dpth0 = (sym) => CBY[sym].depth;
   function startSession(G, sym) {
     const c = CBY[sym];
     if (G.over || G.sess) return { ok: false, msg: 'Not available.' };
@@ -314,10 +316,10 @@
     if (G.pos && G.pos.sym !== sym) return { ok: false, msg: `You're holding ${G.pos.sym}. Trade that pit to close it out.` };
     const N = N_STEPS, per = G.today.per[sym], open = per.openT;
     const S = {
-      sym, n: N, t: 0, open, target: per.closeT, sigT: Math.max(4, open * per.sig),
+      sym, n: N, t: 0, open, target: per.closeT, sigT: Math.max(28, open * per.sig),
       bid: open, ask: open + 1, bids: {}, asks: {}, thinA: 1, thinB: 1, imb: 0, volume: 0,
-      regime: { f: 0, s: 0, left: 0 }, hint: 0, burst: null, react: null, fundJ: 0, totJ: 0,
-      path: [open + 0.5], prints: [], last: open, events: [], orders: [], stop: 0, done: false,
+      regime: { f: 0, s: 0, left: 0 }, hint: 0, burst: null, react: null, rev: null, fundJ: 0, totJ: 0,
+      path: [open + 0.5], prints: [], hit: {}, last: open, flowEma: 0, stepFlow: 0, events: [], orders: [], stop: 0, done: false,
       startEq: 0, wins: 0, trades: 0, scripted: !!per.scripted && !!per.text, aheadEntry: null, offer: null, makerFills: 0,
     };
     G.sess = S;
@@ -328,7 +330,7 @@
       S.totJ = J;
     }
     if (netWorth(G) >= 15000 && !G.sec && G.day - G.lastOffer >= 15 && rnd(G) < .10) {
-      const side = rnd(G) < .5 ? 1 : -1, t0 = 100 + Math.floor(rnd(G) * 250), lots = pick(G, [100, 150, 200, 300]);
+      const side = rnd(G) < .5 ? 1 : -1, t0 = 100 + Math.floor(rnd(G) * 250), lots = dpth0(sym) * pick(G, [6, 10, 15, 20]);
       S.offer = { t: t0, side, lots, jt: t0 + 30, bonus: lots * 2.5, resolved: null };
       G.lastOffer = G.day;
     }
@@ -355,6 +357,7 @@
     S.imb += side * filled / dpth(S) * 0.5;
     // the crowd notices an aggressive player and briefly piles on
     S.react = { dir: side, left: 6, str: Math.min(0.22, 0.12 * filled / dpth(S)) };
+    S.rev = { dir: -side, left: 40, age: 0, str: Math.min(0.15, 0.08 * filled / dpth(S)) };
     const o = S.offer;
     if (o && o.resolved === 'ahead' && !forced && side === o.side && S.t >= o.t && S.t <= o.jt && Math.abs(next) > Math.abs(cur) && !S.aheadEntry) S.aheadEntry = { px: vwap, qty: filled };
     const slipTicks = Math.abs(vwap - before);
@@ -402,6 +405,7 @@
     for (let i = S.prints.length - 1; i >= 0; i--) { const p = S.prints[i]; if (p[0] <= S.t - w) break; if (p[4] !== 'me' && p[4] !== 'mine') sum += p[1] * p[2]; }
     return sum;
   }
+  const flowGauge = (G) => (G.sess ? clamp(G.sess.flowEma * 8, -1, 1) : 0);
   const shoutsNow = (G, n) => { const S = G.sess; return S ? S.prints.slice(-n).reverse() : []; };
   function ladder(G, k) {
     const S = G.sess; if (!S) return { asks: [], bids: [] };
@@ -432,15 +436,16 @@
   function crowdOrder(G, S, burstFrac) {
     const c = CBY[S.sym], t = S.t;
     const fund = S.open + (S.target - S.totJ - S.open) * (t / S.n) + S.fundJ;
-    const gain = 0.35 + 1.6 * (t / S.n) * (t / S.n);
+    const gain = 0.22 + 1.6 * (t / S.n) * (t / S.n);
     const pull = clamp(gain * (fund - midOf(S)) / S.sigT, -0.3, 0.3);
     let p = 0.5 + REG_BIAS * S.regime.f * S.regime.s + pull;
-    if (S.burst) p += 0.35 * S.burst.dir * burstFrac;
+    if (S.burst) p += 0.35 * S.burst.tilt * S.burst.dir * burstFrac * clamp(Math.abs(fund - midOf(S)) / (0.5 * S.sigT), 0.25, 1);
+    if (S.rev && S.rev.age >= 6) p += S.rev.dir * S.rev.str * (S.rev.left / 34);
     if (S.react) p += S.react.dir * S.react.str * (S.react.left / 6);
     p = clamp(p, 0.06, 0.94);
     const side = rnd(G) < p ? 1 : -1;
     let u = rnd(G), k = 0; while (k < SIZE_W.length - 1 && u > SIZE_W[k]) { u -= SIZE_W[k]; k++; }
-    const lots = Math.max(1, Math.round(dpth(S) * c.act * SIZE_F[k] * (1 + 1.5 * burstFrac)));
+    const lots = Math.max(1, Math.round(dpth(S) * c.act * SIZE_F[k] * (1 + 1.5 * burstFrac * (S.burst ? S.burst.size : 1))));
     const r = sweep(G, S, side, lots, 'pit');
     S.imb += side * r.filled / dpth(S);
   }
@@ -452,7 +457,8 @@
     S.t++;
     const t = S.t, c = CBY[S.sym];
     for (const ev of S.events) if (ev.t === t) {
-      S.fundJ += ev.jump; S.burst = { dir: Math.sign(ev.jump) || 1, left: 16, max: 16 };
+      const len = Math.round(clamp(Math.abs(ev.jump) / dpth(S), 16, 40));
+      S.fundJ += ev.jump; S.burst = { dir: Math.sign(ev.jump) || 1, left: len, max: len, size: Math.min(2.5, Math.max(1, Math.abs(ev.jump) / (4 * dpth(S)))), tilt: clamp(Math.abs(ev.jump) / (3 * dpth(S)), 0.4, 1) };
       addNews(G, 'mkt', ev.text); events.push({ kind: 'headline', text: ev.text, jump: ev.jump, scripted: ev.scripted });
     }
     const o = S.offer;
@@ -460,20 +466,23 @@
 
     if (S.regime.left <= 0) newRegime(G, S);
     S.regime.left--;
-    S.imb *= 0.93;
+    S.imb *= 0.93; S.stepFlow = 0;
     S.thinA = clamp(1 - 0.25 * Math.max(0, S.imb), 0.35, 1);
     S.thinB = clamp(1 - 0.25 * Math.max(0, -S.imb), 0.35, 1);
     replenish(G, S);
 
-    const burstFrac = S.burst ? S.burst.left / S.burst.max : 0, mult = 1 + 2 * burstFrac;
+    const burstFrac = S.burst ? S.burst.left / S.burst.max : 0, mult = 1 + 2 * burstFrac * (S.burst ? S.burst.size : 1);
     let n = rnd(G) < SHOUT_RATE * mult ? 1 : 0;
     if (mult > 1.5 && rnd(G) < SHOUT_RATE * (mult - 1)) n++;
     for (let i = 0; i < n; i++) crowdOrder(G, S, burstFrac);
     if (o && o.resolved && t >= o.jt && t < o.jt + 4) { // the customer's block hits the book in chunks
       const r = sweep(G, S, o.side, Math.ceil(o.lots / 4), 'block'); S.imb += o.side * r.filled / dpth(S);
+      if (t === o.jt + 3) S.rev = { dir: -o.side, left: 40, age: 0, str: 0.2 };
     }
+    S.flowEma = 0.96 * S.flowEma + 0.04 * S.stepFlow / dpth(S);
     if (S.burst && --S.burst.left <= 0) S.burst = null;
     if (S.react && --S.react.left <= 0) S.react = null;
+    if (S.rev) { S.rev.age++; if (--S.rev.left <= 0) S.rev = null; }
     ensureDepth(G, S, 5);
     S.path.push(midOf(S));
 
@@ -740,7 +749,7 @@
 
   const api = {
     START_CASH, SELL_RATIO, SAVE_VERSION, TAX_RATE, MAINT, N_STEPS, STEP_MS, CONTRACTS, CBY, HOMES, CARS, TECH, LUX, RANKS, ACH, ERA_EVENTS,
-    newGame, startSession, stepSession, trade, flatten, setStop, placeLimit, cancelOrders, preview, respondOffer, skipDays, recentFlow, shoutsNow, ladder, quote,
+    newGame, startSession, stepSession, trade, flatten, setStop, placeLimit, cancelOrders, preview, respondOffer, skipDays, recentFlow, flowGauge, shoutsNow, ladder, quote,
     buyItem, sellItem, moveHome, checkAchievements,
     netWorth, equity, unreal, maxLots, marginUsed, marginLevel, markT, monthlyCosts, monthlyIncome, rankOf, livingCost,
     dateOfDay, clockOf, fmtPrice, priceOf,
