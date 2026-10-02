@@ -27,15 +27,15 @@
   // anchors: approximate real price history; the game's price wanders around this path
   const A = (y, m, p) => [Date.UTC(y, m - 1, 1), p];
   const CONTRACTS = [
-    { sym: 'SOY', name: 'Soybeans', pit: 'CBOT Grain Pit', emoji: '🌱', tick: .25, tickVal: 12.5, vol: .011, margin: 1000, depth: 15, act: 1, unlock: 0,
+    { sym: 'SOY', name: 'Soybeans', pit: 'CBOT Grain Pit', emoji: '🌱', tick: .25, tickVal: 12.5, vol: .011, margin: 1000, depth: 15, act: 0.88, bias: 1.25, unlock: 0,
       anchors: [A(1990, 1, 570), A(1991, 1, 600), A(1993, 1, 580), A(1993, 8, 700), A(1994, 6, 660), A(1996, 6, 800), A(1997, 6, 830), A(1998, 6, 640), A(1999, 6, 480), A(2000, 6, 530), A(2000, 12, 520)] },
-    { sym: 'CRUDE', name: 'Crude Oil', pit: 'NYMEX Energy Pit', emoji: '🛢️', tick: .01, tickVal: 10, vol: .018, margin: 2000, depth: 12, act: 1, unlock: 12000,
+    { sym: 'CRUDE', name: 'Crude Oil', pit: 'NYMEX Energy Pit', emoji: '🛢️', tick: .01, tickVal: 10, vol: .018, margin: 2000, depth: 12, act: 0.98, bias: 1.05, unlock: 12000,
       anchors: [A(1990, 1, 21), A(1990, 7, 17), A(1990, 10, 37), A(1991, 2, 20), A(1992, 6, 21), A(1994, 6, 18), A(1996, 12, 25), A(1998, 12, 11), A(1999, 12, 25), A(2000, 9, 33), A(2000, 12, 26)] },
-    { sym: 'DM', name: 'Deutschmark', pit: 'CME Currency Pit', emoji: '💶', tick: .0001, tickVal: 12.5, vol: .006, margin: 2000, depth: 12, act: 1, unlock: 30000,
+    { sym: 'DM', name: 'Deutschmark', pit: 'CME Currency Pit', emoji: '💶', tick: .0001, tickVal: 12.5, vol: .006, margin: 2000, depth: 12, act: 0.94, bias: 1.1, unlock: 30000,
       anchors: [A(1990, 1, .60), A(1992, 9, .70), A(1993, 6, .62), A(1995, 4, .73), A(1997, 7, .54), A(1999, 1, .59), A(2000, 10, .43), A(2000, 12, .46)] },
-    { sym: 'BOND', name: 'T-Bonds', pit: 'CBOT Financial Pit', emoji: '📜', tick: 1 / 32, tickVal: 31.25, vol: .006, margin: 3000, depth: 10, act: 1, unlock: 80000,
+    { sym: 'BOND', name: 'T-Bonds', pit: 'CBOT Financial Pit', emoji: '📜', tick: 1 / 32, tickVal: 31.25, vol: .006, margin: 3000, depth: 10, act: 0.84, bias: 1.4, unlock: 80000,
       anchors: [A(1990, 1, 91), A(1991, 6, 97), A(1993, 10, 117), A(1994, 11, 98), A(1995, 12, 118), A(1996, 6, 108), A(1998, 10, 126), A(2000, 1, 98), A(2000, 12, 112)] },
-    { sym: 'SPX', name: 'S&P 500', pit: 'CME Index Pit', emoji: '📈', tick: .05, tickVal: 25, vol: .009, margin: 9000, depth: 8, act: 1, unlock: 250000,
+    { sym: 'SPX', name: 'S&P 500', pit: 'CME Index Pit', emoji: '📈', tick: .05, tickVal: 25, vol: .009, margin: 9000, depth: 8, act: 0.84, bias: 0.8, unlock: 250000,
       anchors: [A(1990, 1, 353), A(1990, 10, 295), A(1991, 6, 375), A(1992, 6, 410), A(1994, 6, 450), A(1995, 6, 540), A(1996, 6, 670), A(1997, 6, 880), A(1998, 6, 1130), A(1998, 10, 960), A(1999, 6, 1330), A(2000, 3, 1500), A(2000, 12, 1320)] },
   ];
   const CBY = {}; CONTRACTS.forEach((c) => { CBY[c.sym] = c; });
@@ -221,6 +221,7 @@
   const SHOUT_RATE = 0.35;   // expected crowd orders per step
   const REG_BIAS = 0.22;     // buy-probability tilt of an informed-flow regime
   const MAX_PRINTS = 80;
+  const RETAIL_RATE = 0.9;   // tiny uninformed orders per step: they chew queues (and fill resting orders) without moving price
 
   const dpth = (S) => CBY[S.sym].depth;
   function freshQty(G, S, thin) { return Math.max(1, Math.round(dpth(S) * (0.35 + 0.8 * rnd(G)) * (thin == null ? 1 : thin))); }
@@ -264,7 +265,8 @@
       }
     }
     const vwap = filled ? cost / filled : (side > 0 ? S.ask : S.bid);
-    if (filled) { pushPrint(S, side, filled, vwap, who); S.volume += filled; S.last = vwap; if (who === 'pit' || who === 'block') S.stepFlow += side * filled; }
+    if (filled && who !== 'retail') pushPrint(S, side, filled, vwap, who);
+    if (filled) { S.volume += filled; S.last = vwap; if (who === 'pit' || who === 'block') S.stepFlow += side * filled; }
     S.orders = S.orders.filter((o) => o.rem > 0);
     return { filled, vwap };
   }
@@ -356,7 +358,7 @@
     const r = applyFill(G, S, side, filled, vwap, false);
     S.imb += side * filled / dpth(S) * 0.5;
     // the crowd notices an aggressive player and briefly piles on
-    S.react = { dir: side, left: 6, str: Math.min(0.22, 0.12 * filled / dpth(S)) };
+    S.react = { dir: side, left: 6, str: Math.min(0.08, 0.04 * filled / dpth(S)) };
     S.rev = { dir: -side, left: 40, age: 0, str: Math.min(0.15, 0.08 * filled / dpth(S)) };
     const o = S.offer;
     if (o && o.resolved === 'ahead' && !forced && side === o.side && S.t >= o.t && S.t <= o.jt && Math.abs(next) > Math.abs(cur) && !S.aheadEntry) S.aheadEntry = { px: vwap, qty: filled };
@@ -429,7 +431,11 @@
       L = clamp(L, 1, Math.round(D * 2.5));
       S[key][p] = L;
       const ord = S.orders.find((o) => o.price === p && o.side === (key === 'bids' ? 1 : -1));
-      if (ord) ord.ahead = Math.min(ord.ahead, L);
+      if (ord) {
+        const cut = Math.floor(ord.ahead * (0.03 + 0.07 * rnd(G)) + rnd(G));
+        ord.ahead = Math.max(0, Math.min(ord.ahead - cut, L - cut));
+        S[key][p] = Math.max(1, L - cut);
+      }
     }
   }
 
@@ -438,7 +444,7 @@
     const fund = S.open + (S.target - S.totJ - S.open) * (t / S.n) + S.fundJ;
     const gain = 0.22 + 1.6 * (t / S.n) * (t / S.n);
     const pull = clamp(gain * (fund - midOf(S)) / S.sigT, -0.3, 0.3);
-    let p = 0.5 + REG_BIAS * S.regime.f * S.regime.s + pull;
+    let p = 0.5 + REG_BIAS * (c.bias || 1) * S.regime.f * S.regime.s + pull;
     if (S.burst) p += 0.35 * S.burst.tilt * S.burst.dir * burstFrac * clamp(Math.abs(fund - midOf(S)) / (0.5 * S.sigT), 0.25, 1);
     if (S.rev && S.rev.age >= 6) p += S.rev.dir * S.rev.str * (S.rev.left / 34);
     if (S.react) p += S.react.dir * S.react.str * (S.react.left / 6);
@@ -475,6 +481,9 @@
     let n = rnd(G) < SHOUT_RATE * mult ? 1 : 0;
     if (mult > 1.5 && rnd(G) < SHOUT_RATE * (mult - 1)) n++;
     for (let i = 0; i < n; i++) crowdOrder(G, S, burstFrac);
+    for (let r = RETAIL_RATE; r > 0; r -= 1) {
+      if (rnd(G) < Math.min(1, r)) sweep(G, S, rnd(G) < 0.5 ? 1 : -1, Math.max(1, Math.round(dpth(S) * 0.09 * (0.5 + rnd(G)))), 'retail');
+    }
     if (o && o.resolved && t >= o.jt && t < o.jt + 4) { // the customer's block hits the book in chunks
       const r = sweep(G, S, o.side, Math.ceil(o.lots / 4), 'block'); S.imb += o.side * r.filled / dpth(S);
       if (t === o.jt + 3) S.rev = { dir: -o.side, left: 40, age: 0, str: 0.2 };
