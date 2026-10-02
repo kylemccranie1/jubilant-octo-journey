@@ -5,7 +5,13 @@ Trade your way up to a Hamptons mansion and a private jet — or lose it all and
 
 Plain HTML/JS, no build step. Plays in a phone browser; "Add to Home Screen" for fullscreen.
 
-## Run
+## Play online (GitHub Pages)
+
+Pushes to `main` auto-deploy via `.github/workflows/pages.yml` to `https://kylemccranie1.github.io/jubilant-octo-journey/`.
+One-time setup: repo **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+On Android Chrome open the URL and choose **⋮ → Add to Home screen**.
+
+## Run locally
 
     python3 -m http.server 8000      # then open http://<your-ip>:8000 on your phone
 
