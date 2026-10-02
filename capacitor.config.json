@@ -1,0 +1,8 @@
+{
+  "appId": "com.example.wallstreet90",
+  "appName": "Wall Street '90",
+  "webDir": "www",
+  "backgroundColor": "#06080f",
+  "ios": { "contentInset": "always" },
+  "android": { "allowMixedContent": false }
+}

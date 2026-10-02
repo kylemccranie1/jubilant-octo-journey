@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#06080f">
+<title>Wall Street '90</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app" class="hidden">
+  <header id="top"></header>
+  <div id="tape"><span id="tapeText"></span></div>
+  <main id="view"></main>
+  <div id="actions">
+    <button id="btnWeek" class="primary">Next Week ▶</button>
+    <button id="btnMonth">+1 Month ▶▶</button>
+  </div>
+  <nav id="tabs"></nav>
+</div>
+
+<div id="sheet" class="hidden"><div class="sheet-card" id="sheetCard"></div></div>
+<div id="modal" class="hidden"><div class="modal-card" id="modalCard"></div></div>
+<div id="toast" class="hidden"></div>
+
+<div id="title">
+  <div class="title-card">
+    <div class="logo">WALL STREET<span>'90</span></div>
+    <p>It's 1990. You've got $8,000, a landline and big dreams.<br>
+    Trade your way from a roach-motel studio to a Hamptons mansion — or lose it all and end up on the street.</p>
+    <button id="btnNew" class="primary big">New Game</button>
+    <button id="btnContinue" class="big hidden">Continue</button>
+    <small>Greed is good. Rent is due.</small>
+  </div>
+</div>
+
+<script src="js/engine.js"></script>
+<script src="js/sfx.js"></script>
+<script src="js/ui.js"></script>
+</body>
+</html>

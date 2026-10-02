@@ -1,6 +1,5 @@
-__pycache__/
-*.pyc
-.pytest_cache/
-data_cache/
-results/
-.env
+node_modules
+.DS_Store
+www
+android
+ios
