@@ -9,6 +9,7 @@
   const DOWS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   let G = null, tab = 'pit', selSym = 'SOY', seen = 0, toastTimer = null, busy = false;
+  let scene = null, titleScene = null;
   let live = null; // { timer, speed, paused, qty, stopIdx, bannerTimer, lastSave }
   let trophies = {};
   try { trophies = JSON.parse(localStorage.getItem(TROPHY_KEY)) || {}; } catch (e) {}
@@ -97,7 +98,7 @@
     }
     html += `<h2>Between sessions</h2><div class="chips"><button data-skip="1">Skip day</button><button data-skip="5">Skip week</button><button data-skip="21">Skip month</button></div>
       <div class="dim" style="font-size:11px;margin-top:6px">Skipping lets the market move without you (positions are marked to market daily; margin calls still apply). Bills still come due.</div>`;
-    html += `<div class="card" style="margin-top:12px;font-size:12px;color:var(--dim)"><b>How the pit works:</b> watch the shouting — more big BUY shouts than SELLs means the crowd is leaning up. Hit <b>BUY</b> to lift the offer or <b>SELL</b> to hit the bid. You pay the 1-tick spread plus a clearing fee, so you need the crowd to move price for you. Use a stop. Size small until you've earned it.</div>`;
+    html += `<div class="card" style="margin-top:12px;font-size:12px;color:var(--dim)"><b>How the pit works:</b> every shout is a real order eating the book — watch the ladder and the tape. Big BUYs lift the offer and push price up; the crowd's lean (the pit's hand signals and the flow gauge) tells you which way the informed money is going. <b>BUY</b>/<b>SELL</b> cross the spread and walk the book, so big orders slip and move price (then partly revert). <b>Join BID/OFFER</b> rests an order in the queue: great for taking profit into strength, dangerous for quoting both sides — you mostly get filled when the market is running over you. Use a stop. Size small until you've earned it.</div>`;
     return html;
   }
 
@@ -260,6 +261,11 @@
     live = { timer: null, speed: 1, paused: false, qty: 1, stopIdx: 0, lastSave: 0, bannerTimer: null, modalOpen: false, lastShout: -1 };
     if (G.sess.stop) live.stopIdx = Math.max(0, STOPS.indexOf(G.sess.stop));
     $('pit').classList.remove('hidden'); document.body.classList.add('live');
+    if (titleScene) titleScene.stop();
+    if (!scene) scene = window.PitScene.create($('pScene')); else scene.resize();
+    scene.reset(); scene.start(); if (!resumePaused) scene.bell();
+    live.seq = G.sess.pseq || 0; live.act = 0;
+    if (window.Sfx) { window.Sfx.roarStart(); }
     $('pName').textContent = `${E.CBY[G.sess.sym].emoji} ${E.CBY[G.sess.sym].name}`;
     buildQty(); sizeCanvas(); updateLive();
     save();
@@ -270,7 +276,7 @@
   function setPaused(p) {
     live.paused = p; $('pPaused').classList.toggle('hidden', !p);
     $('pPause').textContent = p ? '▶' : '⏸';
-    if (p) { stopTimer(); save(); } else startTimer();
+    if (p) { stopTimer(); save(); if (window.Sfx) window.Sfx.roarLevel(0); } else startTimer();
     updateLive();
   }
 
@@ -286,6 +292,7 @@
     if (!G.sess || live.modalOpen) return;
     const S = G.sess, prevShoutT = S.t;
     const evs = E.stepSession(G);
+    feedScene(S, evs);
     handleLiveEvents(evs);
     if (G.sess && !G.sess.done) {
       const sh = E.shoutsNow(G, 1)[0];
@@ -294,6 +301,21 @@
       updateLive();
       const now = Date.now(); if (now - live.lastSave > 4000) { live.lastSave = now; save(); }
     }
+  }
+
+  function feedScene(S, evs) {
+    if (!scene || !live) return;
+    const D = E.CBY[S.sym].depth; let n = 0;
+    for (const pr of S.prints) {
+      if (pr[5] <= live.seq) continue;
+      live.seq = pr[5];
+      if (pr[4] === 'me' || pr[4] === 'mine') scene.mine(pr[1]);
+      else { scene.print(pr[1], pr[2] / D, pr[4]); n++; }
+    }
+    for (const e of evs) if (e.kind === 'headline') scene.headline(Math.sign(e.jump) || 1);
+    live.act = 0.9 * live.act + 0.1 * Math.min(1, n * 0.8);
+    scene.setLevels(E.flowGauge(G), live.act);
+    if (window.Sfx) window.Sfx.roarLevel(Math.min(1, 0.2 + live.act * 1.4 + (S.burst ? 0.35 : 0)));
   }
 
   async function handleLiveEvents(evs) {
@@ -325,6 +347,7 @@
   async function leaveLive(evs) {
     stopTimer(); live.modalOpen = true;
     $('pit').classList.add('hidden'); document.body.classList.remove('live'); live = null;
+    if (scene) scene.stop(); if (window.Sfx) window.Sfx.roarStop();
     busy = true;
     await afterEvents(evs.filter((e) => !['headline', 'stop', 'offer'].includes(e.kind)));
   }
@@ -339,6 +362,14 @@
     c.width = Math.max(1, r.width * dpr); c.height = Math.max(1, r.height * dpr);
   }
 
+  // split-flap style price board: each changed character flips
+  function flapPrice(str) {
+    const el = $('pLast'); if (el.dataset.v === str) return;
+    const prev = el.dataset.v || '';
+    el.dataset.v = str;
+    el.innerHTML = [...str].map((ch, i) => `<span class="flap${ch === '.' || ch === '-' ? ' dot' : ''}${prev[i] !== ch && prev ? ' flip' : ''}">${ch}</span>`).join('');
+  }
+
   function updateLive() {
     const S = G.sess; if (!S) return;
     const sym = S.sym, c = E.CBY[sym], t = S.t, q = E.quote(S), mid = q.mid, bid = q.bid, ask = q.ask, D = c.depth;
@@ -348,7 +379,7 @@
     const lastR = Math.max(bid, Math.min(ask, Math.round(S.last)));
     if (live.lastR != null && lastR !== live.lastR) { live.flash = { up: lastR > live.lastR, until: performance.now() + 320 }; }
     live.lastR = lastR;
-    $('pLast').textContent = fp(sym, lastR);
+    flapPrice(fp(sym, lastR));
     $('pLast').className = 'mono' + (live.flash && live.flash.until > performance.now() ? (live.flash.up ? ' fup' : ' fdown') : '');
     $('pChg').textContent = pct(chg); $('pChg').className = 'mono ' + (chg >= 0 ? 'up' : 'down');
     $('pBA').textContent = `${fp(sym, bid)} × ${fp(sym, ask)}`;
@@ -392,12 +423,15 @@
     const pad = Math.max(3, (hi - lo) * 0.15); lo -= pad; hi += pad;
     const span = Math.min(150, Math.max(40, S.t)), t0 = Math.max(0, S.t - span);
     const X = (i) => ((i - t0) / span) * W, Y = (v) => H - ((v - lo) / (hi - lo)) * H;
-    ctx.strokeStyle = 'rgba(255,255,255,.06)'; ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(70,255,140,.10)'; ctx.lineWidth = 1;
     for (let k = 1; k < 4; k++) { ctx.beginPath(); ctx.moveTo(0, H * k / 4); ctx.lineTo(W, H * k / 4); ctx.stroke(); }
-    const up = pts[pts.length - 1] >= pts[0], col = up ? '#2dff7a' : '#ff4d5e';
+    for (let k = 1; k < 6; k++) { ctx.beginPath(); ctx.moveTo(W * k / 6, 0); ctx.lineTo(W * k / 6, H); ctx.stroke(); }
+    const up = pts[pts.length - 1] >= pts[0], col = up ? '#4dffa0' : '#ff6b6b';
+    ctx.shadowColor = up ? '#2dff7a' : '#ff4d5e'; ctx.shadowBlur = 8 * dpr;
     ctx.lineWidth = 2 * dpr; ctx.strokeStyle = col; ctx.beginPath();
     const base = Math.max(0, S.t - Math.min(150, Math.max(40, S.t)));
     pts.forEach((v, i) => (i ? ctx.lineTo(X(base + i), Y(v)) : ctx.moveTo(X(base + i), Y(v)))); ctx.stroke();
+    ctx.shadowBlur = 0;
     ctx.lineTo(X(base + pts.length - 1), H); ctx.lineTo(0, H); ctx.fillStyle = up ? 'rgba(45,255,122,.08)' : 'rgba(255,77,94,.08)'; ctx.fill();
     ctx.setLineDash([6 * dpr, 4 * dpr]); ctx.lineWidth = 1.5 * dpr;
     if (G.pos && G.pos.sym === S.sym) {
@@ -410,9 +444,9 @@
     for (const pr of S.prints) { if (pr[0] < t0) continue; // order-flow bubbles: size = lots, color = aggressor side
       const mine = pr[4] === 'me' || pr[4] === 'mine';
       const r = Math.min(11, 2.5 + Math.sqrt(pr[2] / D) * 3.2) * dpr;
-      ctx.beginPath(); ctx.arc(X(pr[0]), Y(pr[3]), r, 0, 7);
-      if (mine) { ctx.lineWidth = 2.5 * dpr; ctx.strokeStyle = '#ffffff'; ctx.stroke(); }
-      else { ctx.fillStyle = pr[1] > 0 ? 'rgba(45,255,122,.45)' : 'rgba(255,77,94,.45)'; ctx.fill(); }
+      const sz = Math.round(r * 1.5), bx = Math.round(X(pr[0])) - (sz >> 1), by = Math.round(Y(pr[3])) - (sz >> 1);
+      if (mine) { ctx.lineWidth = 2 * dpr; ctx.strokeStyle = '#ffffff'; ctx.strokeRect(bx, by, sz, sz); }
+      else { ctx.fillStyle = pr[1] > 0 ? 'rgba(45,255,122,.5)' : 'rgba(255,77,94,.5)'; ctx.fillRect(bx, by, sz, sz); }
     }
     ctx.fillStyle = col; ctx.beginPath(); ctx.arc(X(base + pts.length - 1), Y(pts[pts.length - 1]), 4 * dpr, 0, 7); ctx.fill();
   }
@@ -485,14 +519,19 @@
   $('pFF').addEventListener('click', skipToClose);
   $('pPause').addEventListener('click', () => setPaused(!live.paused));
   $('pResume').addEventListener('click', () => setPaused(false));
-  $('pLeave').addEventListener('click', () => { stopTimer(); save(); $('pit').classList.add('hidden'); live = null; $('app').classList.add('hidden'); $('title').classList.remove('hidden'); $('btnContinue').classList.remove('hidden'); });
+  $('pLeave').addEventListener('click', () => { stopTimer(); save(); if (scene) scene.stop(); if (window.Sfx) window.Sfx.roarStop(); document.body.classList.remove('live'); $('pit').classList.add('hidden'); live = null; $('app').classList.add('hidden'); $('title').classList.remove('hidden'); $('btnContinue').classList.remove('hidden'); });
   $('pSpeed').addEventListener('click', () => { live.speed = live.speed === 1 ? 2 : 1; $('pSpeed').textContent = live.speed + '×'; if (!live.paused && !live.modalOpen) startTimer(); });
   $('btnBell').addEventListener('click', openBell);
   $('btnNew').addEventListener('click', newGame);
   $('btnContinue').addEventListener('click', cont);
-  window.addEventListener('resize', () => { if (live) { sizeCanvas(); updateLive(); } });
+  window.addEventListener('resize', () => { if (live) { sizeCanvas(); if (scene) scene.resize(); updateLive(); } });
   document.addEventListener('visibilitychange', () => { if (document.hidden && live && !live.paused && !live.modalOpen) setPaused(true); });
 
+  if ($('titleScene') && window.PitScene) {
+    titleScene = window.PitScene.create($('titleScene')); titleScene.start();
+    setInterval(() => { if (!$('title').classList.contains('hidden')) { const r = Math.random(); titleScene.setLevels(Math.sin(Date.now() / 4000), 0.5); titleScene.print(r < 0.5 ? 1 : -1, 0.5 + Math.random() * 3, Math.random() < 0.06 ? 'block' : 'pit'); } }, 380);
+    window.addEventListener('resize', () => titleScene.resize());
+  }
   if (load()) $('btnContinue').classList.remove('hidden');
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();

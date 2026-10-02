@@ -38,7 +38,27 @@
     lose: () => [N.G4, N.F4, N.D4, N.C4].forEach((f, i) => tone(f, .35, 'sawtooth', .07, i * .32, f * .93)),  // sad trombone
     sneaky: () => { tone(220, .2, 'sine', .08); tone(233, .3, 'sine', .08, .22); },
   };
+  // ambient pit roar: looped band-passed noise whose loudness follows pit activity
+  let roar = null;
+  function roarStart() {
+    const c = ensure(); if (!c || roar) return;
+    const len = c.sampleRate * 2, buf = c.createBuffer(1, len, c.sampleRate), d = buf.getChannelData(0);
+    let b = 0; for (let i = 0; i < len; i++) { b = 0.97 * b + (Math.random() * 2 - 1) * 0.3; d[i] = b; } // brownish noise
+    const src = c.createBufferSource(); src.buffer = buf; src.loop = true;
+    const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 650; bp.Q.value = 0.6;
+    const g = c.createGain(); g.gain.value = 0;
+    src.connect(bp).connect(g).connect(c.destination); src.start();
+    roar = { src, g, bp };
+  }
+  function roarLevel(x) {
+    if (!roar || !ctx) return;
+    const v = muted ? 0 : Math.max(0, Math.min(1, x)) * 0.07;
+    roar.g.gain.setTargetAtTime(v, ctx.currentTime, 0.25);
+    roar.bp.frequency.setTargetAtTime(500 + 700 * Math.max(0, Math.min(1, x)), ctx.currentTime, 0.4);
+  }
+  function roarStop() { if (!roar) return; const r = roar; roar = null; try { r.g.gain.setTargetAtTime(0, ctx.currentTime, 0.1); setTimeout(() => { try { r.src.stop(); } catch (e) {} }, 400); } catch (e) {} }
   window.Sfx = {
+    roarStart, roarLevel, roarStop,
     play(name) { try { (SOUNDS[name] || (() => {}))(); } catch (e) {} },
     unlock() { ensure(); },
     get muted() { return muted; },

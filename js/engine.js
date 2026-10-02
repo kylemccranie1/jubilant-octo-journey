@@ -90,7 +90,7 @@
     SOY: [['USDA report: yields ABOVE expectations. Beans slide.', -1, .02], ['USDA report: crop smaller than expected. Beans jump!', 1, .02], ['China buys a big chunk of the crop.', 1, .015]],
     CRUDE: [['API inventories: BIG BUILD. Crude drops.', -1, .025], ['API inventories: surprise DRAW. Crude pops.', 1, .025], ['Pipeline outage rattles the energy pit.', 1, .02]],
     DM: [['Bundesbank sounds hawkish. Mark rallies.', 1, .008], ['Bundesbank dovish. Mark slips.', -1, .008], ['German reunification costs worry the Mark.', -1, .007]],
-    BOND: [['Fed speaker hints at tighter policy. Bonds sell off.', -1, .008], ['Soft jobs report. Bonds rally.', 1, .008], ['Inflation print hot. Long end hammered.', -1, .01]],
+    BOND: [['Fed speaker hints at tighter policy. Bonds sell off.', -1, .012], ['Soft jobs report. Bonds rally.', 1, .012], ['Inflation print hot. Long end hammered.', -1, .014]],
     SPX: [['Blue-chip earnings blow past estimates!', 1, .01], ['Profit warning from a Dow component.', -1, .01], ['Takeover chatter fuels a rally.', 1, .008]],
   };
 
@@ -235,7 +235,7 @@
   const quote = (S) => ({ bid: S.bid, ask: S.ask, mid: midOf(S) });
 
   function pushPrint(S, side, lots, px, who) {
-    S.prints.push([S.t, side, lots, px, who]);
+    S.prints.push([S.t, side, lots, px, who, ++S.pseq]);
     if (S.prints.length > MAX_PRINTS) S.prints.shift();
   }
 
@@ -322,7 +322,7 @@
       sym, n: N, t: 0, open, target: per.closeT, sigT: Math.max(28, open * per.sig),
       bid: open, ask: open + 1, bids: {}, asks: {}, thinA: 1, thinB: 1, imb: 0, volume: 0,
       regime: { f: 0, s: 0, left: 0 }, hint: 0, burst: null, react: null, rev: null, fundJ: 0, totJ: 0,
-      path: [open + 0.5], prints: [], hit: {}, notes: [], last: open, flowEma: 0, stepFlow: 0, events: [], orders: [], stop: 0, done: false,
+      path: [open + 0.5], prints: [], hit: {}, notes: [], pseq: 0, last: open, flowEma: 0, stepFlow: 0, events: [], orders: [], stop: 0, done: false,
       startEq: 0, wins: 0, trades: 0, scripted: !!per.scripted && !!per.text, aheadEntry: null, offer: null, makerFills: 0,
     };
     G.sess = S;
@@ -359,8 +359,8 @@
     const r = applyFill(G, S, side, filled, vwap, false);
     S.imb += side * filled / dpth(S) * 0.5;
     // the crowd notices an aggressive player and briefly piles on
-    S.react = { dir: side, left: 6, str: Math.min(0.08, 0.04 * filled / dpth(S)) };
-    S.rev = { dir: -side, left: 40, age: 0, str: Math.min(0.15, 0.08 * filled / dpth(S)) };
+    S.react = { dir: side, left: 6, str: Math.min(0.04, 0.02 * filled / dpth(S)) };
+    S.rev = { dir: -side, left: 40, age: 0, str: Math.min(0.12, 0.05 * filled / dpth(S)) };
     const o = S.offer;
     if (o && o.resolved === 'ahead' && !forced && side === o.side && S.t >= o.t && S.t <= o.jt && Math.abs(next) > Math.abs(cur) && !S.aheadEntry) S.aheadEntry = { px: vwap, qty: filled };
     const slipTicks = Math.abs(vwap - before);
@@ -433,7 +433,7 @@
       S[key][p] = L;
       const ord = S.orders.find((o) => o.price === p && o.side === (key === 'bids' ? 1 : -1));
       if (ord) {
-        const cut = Math.floor(ord.ahead * (0.03 + 0.07 * rnd(G)) + rnd(G));
+        const cut = Math.floor(ord.ahead * (0.06 + 0.09 * rnd(G)) + rnd(G));
         ord.ahead = Math.max(0, Math.min(ord.ahead - cut, L - cut));
         S[key][p] = Math.max(1, L - cut);
       }
@@ -443,11 +443,11 @@
   function crowdOrder(G, S, burstFrac) {
     const c = CBY[S.sym], t = S.t;
     const fund = S.open + (S.target - S.totJ - S.open) * (t / S.n) + S.fundJ;
-    const gain = 0.22 + 1.6 * (t / S.n) * (t / S.n);
+    const gain = 0.22 + 1.6 * (t / S.n) * (t / S.n) + (S.burst ? 0.9 * S.burst.left / S.burst.max : 0);
     const pull = clamp(gain * (fund - midOf(S)) / S.sigT, -0.3, 0.3);
     let p = 0.5 + REG_BIAS * (c.bias || 1) * S.regime.f * S.regime.s + pull;
-    if (S.burst) p += 0.35 * S.burst.tilt * S.burst.dir * burstFrac * clamp(Math.abs(fund - midOf(S)) / (0.5 * S.sigT), 0.25, 1);
-    if (S.rev && S.rev.age >= 6) p += S.rev.dir * S.rev.str * (S.rev.left / 34);
+    if (S.burst) p += 0.5 * S.burst.tilt * S.burst.dir * burstFrac * clamp(Math.abs(fund - midOf(S)) / (0.5 * S.sigT), 0.25, 1);
+    if (S.rev && S.rev.age >= 2) p += S.rev.dir * S.rev.str * (S.rev.left / 34);
     if (S.react) p += S.react.dir * S.react.str * (S.react.left / 6);
     p = clamp(p, 0.06, 0.94);
     const side = rnd(G) < p ? 1 : -1;
@@ -465,7 +465,7 @@
     const t = S.t, c = CBY[S.sym];
     for (const ev of S.events) if (ev.t === t) {
       const len = Math.round(clamp(Math.abs(ev.jump) / dpth(S), 16, 40));
-      S.fundJ += ev.jump; S.burst = { dir: Math.sign(ev.jump) || 1, left: len, max: len, size: Math.min(2.5, Math.max(1, Math.abs(ev.jump) / (4 * dpth(S)))), tilt: clamp(Math.abs(ev.jump) / (3 * dpth(S)), 0.4, 1) };
+      S.fundJ += ev.jump; S.burst = { dir: Math.sign(ev.jump) || 1, left: len, max: len, size: Math.min(S.sym === 'BOND' ? 1.5 : 2.5, Math.max(1, Math.abs(ev.jump) / (4 * dpth(S)))), tilt: clamp(Math.abs(ev.jump) / (3 * dpth(S)), 0.4, 1) };
       addNews(G, 'mkt', ev.text); events.push({ kind: 'headline', text: ev.text, jump: ev.jump, scripted: ev.scripted });
     }
     const o = S.offer;
