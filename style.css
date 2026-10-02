@@ -112,3 +112,18 @@ button.big2{padding:16px 0;font-size:22px;font-weight:800;touch-action:manipulat
 #pPaused{position:absolute;inset:0;background:rgba(6,8,15,.88);display:flex;align-items:center;justify-content:center;text-align:center;font-size:28px;font-weight:800}
 #pPaused small{display:block;font-size:13px;font-weight:400;color:var(--dim);margin:6px 0 16px}#pPaused button{display:block;width:220px;margin:0 auto}
 #pPaused button{font-size:16px;font-weight:700}
+
+.pit-mid{display:grid;grid-template-columns:1fr 1.1fr;gap:6px}
+#pLadder{display:flex;flex-direction:column;gap:1px;font:11px var(--mono);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:3px}
+.lv{display:grid;grid-template-columns:54px 1fr 38px;align-items:center;gap:4px;height:16px}
+.lv .lp{color:var(--dim)}.lv .ls{text-align:right}.lv .ls b{color:var(--cyan)}
+.lbar{height:10px;background:rgba(255,255,255,.04);border-radius:2px;overflow:hidden}.lbar i{display:block;height:100%}
+.lv.a .lbar i{background:rgba(255,77,94,.55)}.lv.b .lbar i{background:rgba(45,255,122,.55)}
+.lv.b:first-of-type,.lv.b:nth-of-type(4){border-top:1px dashed var(--line)}
+#pShouts{height:auto;min-height:100px}
+.sh small{opacity:.7;font-weight:400}.sh.mine{outline:1px solid #fff;font-weight:800}
+#pGauge{display:flex;align-items:center;gap:6px;font:10px var(--mono);color:var(--dim)}
+.g-bar{position:relative;flex:1;height:8px;background:var(--panel2);border-radius:4px;overflow:hidden}.g-bar i{position:absolute;top:0;height:100%}
+.g-bar::after{content:"";position:absolute;left:50%;top:0;width:1px;height:100%;background:#fff6}
+.hint{color:var(--amber);min-width:54px;text-align:right}
+button.big2 small{font-size:11px}

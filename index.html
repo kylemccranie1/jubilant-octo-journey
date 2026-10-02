@@ -30,11 +30,13 @@
   <div class="pit-price"><span id="pLast" class="mono"></span><span id="pChg" class="mono"></span><span id="pBA" class="mono dim"></span></div>
   <div id="pBanner" class="banner hidden"></div>
   <canvas id="pChart"></canvas>
-  <div id="pShouts"></div>
+  <div id="pGauge"><span class="g-l">SELL</span><div class="g-bar"><i id="pGaugeFill"></i></div><span class="g-r">BUY</span><span id="pHint" class="hint"></span></div>
+  <div class="pit-mid"><div id="pLadder"></div><div id="pShouts"></div></div>
   <div id="pPos" class="pit-pos"></div>
   <div class="pit-ctl">
     <div class="chips" id="pQty"></div>
     <div class="row-btns"><button id="pStop">Stop: Off</button><button id="pFlat">FLATTEN</button><button id="pFF">Skip to close ⏭</button></div>
+    <div class="row-btns"><button id="pBid">Join BID 🟢</button><button id="pOffer">Join OFFER 🔴</button><button id="pCancel">Cancel orders</button></div>
     <div class="two"><button id="pSell" class="sell big2">SELL</button><button id="pBuy" class="buy big2">BUY</button></div>
   </div>
   <div id="pPaused" class="hidden"><div>⏸ PAUSED<small>No trading while paused</small><button id="pResume" class="primary">Resume</button><button id="pLeave" style="margin-top:8px">Save &amp; leave the floor</button></div></div>

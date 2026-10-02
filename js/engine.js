@@ -27,15 +27,15 @@
   // anchors: approximate real price history; the game's price wanders around this path
   const A = (y, m, p) => [Date.UTC(y, m - 1, 1), p];
   const CONTRACTS = [
-    { sym: 'SOY', name: 'Soybeans', pit: 'CBOT Grain Pit', emoji: '🌱', tick: .25, tickVal: 12.5, vol: .011, margin: 1000, depth: 15, unlock: 0,
+    { sym: 'SOY', name: 'Soybeans', pit: 'CBOT Grain Pit', emoji: '🌱', tick: .25, tickVal: 12.5, vol: .011, margin: 1000, depth: 15, act: 1, unlock: 0,
       anchors: [A(1990, 1, 570), A(1991, 1, 600), A(1993, 1, 580), A(1993, 8, 700), A(1994, 6, 660), A(1996, 6, 800), A(1997, 6, 830), A(1998, 6, 640), A(1999, 6, 480), A(2000, 6, 530), A(2000, 12, 520)] },
-    { sym: 'CRUDE', name: 'Crude Oil', pit: 'NYMEX Energy Pit', emoji: '🛢️', tick: .01, tickVal: 10, vol: .018, margin: 2000, depth: 12, unlock: 12000,
+    { sym: 'CRUDE', name: 'Crude Oil', pit: 'NYMEX Energy Pit', emoji: '🛢️', tick: .01, tickVal: 10, vol: .018, margin: 2000, depth: 12, act: 1, unlock: 12000,
       anchors: [A(1990, 1, 21), A(1990, 7, 17), A(1990, 10, 37), A(1991, 2, 20), A(1992, 6, 21), A(1994, 6, 18), A(1996, 12, 25), A(1998, 12, 11), A(1999, 12, 25), A(2000, 9, 33), A(2000, 12, 26)] },
-    { sym: 'DM', name: 'Deutschmark', pit: 'CME Currency Pit', emoji: '💶', tick: .0001, tickVal: 12.5, vol: .006, margin: 2000, depth: 12, unlock: 30000,
+    { sym: 'DM', name: 'Deutschmark', pit: 'CME Currency Pit', emoji: '💶', tick: .0001, tickVal: 12.5, vol: .006, margin: 2000, depth: 12, act: 1, unlock: 30000,
       anchors: [A(1990, 1, .60), A(1992, 9, .70), A(1993, 6, .62), A(1995, 4, .73), A(1997, 7, .54), A(1999, 1, .59), A(2000, 10, .43), A(2000, 12, .46)] },
-    { sym: 'BOND', name: 'T-Bonds', pit: 'CBOT Financial Pit', emoji: '📜', tick: 1 / 32, tickVal: 31.25, vol: .006, margin: 3000, depth: 10, unlock: 80000,
+    { sym: 'BOND', name: 'T-Bonds', pit: 'CBOT Financial Pit', emoji: '📜', tick: 1 / 32, tickVal: 31.25, vol: .006, margin: 3000, depth: 10, act: 1, unlock: 80000,
       anchors: [A(1990, 1, 91), A(1991, 6, 97), A(1993, 10, 117), A(1994, 11, 98), A(1995, 12, 118), A(1996, 6, 108), A(1998, 10, 126), A(2000, 1, 98), A(2000, 12, 112)] },
-    { sym: 'SPX', name: 'S&P 500', pit: 'CME Index Pit', emoji: '📈', tick: .05, tickVal: 25, vol: .009, margin: 9000, depth: 8, unlock: 250000,
+    { sym: 'SPX', name: 'S&P 500', pit: 'CME Index Pit', emoji: '📈', tick: .05, tickVal: 25, vol: .009, margin: 9000, depth: 8, act: 1, unlock: 250000,
       anchors: [A(1990, 1, 353), A(1990, 10, 295), A(1991, 6, 375), A(1992, 6, 410), A(1994, 6, 450), A(1995, 6, 540), A(1996, 6, 670), A(1997, 6, 880), A(1998, 6, 1130), A(1998, 10, 960), A(1999, 6, 1330), A(2000, 3, 1500), A(2000, 12, 1320)] },
   ];
   const CBY = {}; CONTRACTS.forEach((c) => { CBY[c.sym] = c; });
@@ -213,78 +213,65 @@
     }
   }
 
-  // ---------------------------------------------------------------- trading session
-  const JUMP_W = [.30, .22, .16, .12, .08, .06, .04, .02];
-  const bidT = (S, t) => Math.floor(S.path[t]);
+  // ---------------------------------------------------------------- trading session (price emerges from order flow)
+  // A simulated pit book: queued lots at each price level. Crowd shouts are real market orders that eat the book;
+  // when a level is cleared the price steps. Your market orders do the same (slippage + impact), and your
+  // resting limit orders sit in the queue and get filled as the crowd trades through them.
+  const SIZE_F = [0.25, 0.5, 1, 2, 4], SIZE_W = [0.33, 0.30, 0.22, 0.10, 0.05];
+  const SHOUT_RATE = 0.35;   // expected crowd orders per step
+  const REG_BIAS = 0.17;     // buy-probability tilt of an informed-flow regime
+  const MAX_PRINTS = 80;
 
-  function startSession(G, sym) {
-    const c = CBY[sym];
-    if (G.over || G.sess) return { ok: false, msg: 'Not available.' };
-    if (!c || !G.unlocked[sym]) return { ok: false, msg: 'That pit is locked.' };
-    if (G.pos && G.pos.sym !== sym) return { ok: false, msg: `You're holding ${G.pos.sym}. Trade that pit to close it out.` };
-    const N = N_STEPS, per = G.today.per[sym], open = per.openT, close = per.closeT;
-    const sigStep = open * per.sig * 0.9 / Math.sqrt(N);
+  const dpth = (S) => CBY[S.sym].depth;
+  function freshQty(G, S, thin) { return Math.max(1, Math.round(dpth(S) * (0.5 + rnd(G)) * (thin == null ? 1 : thin))); }
+  function ensureLevel(G, S, key, p) {
+    const book = S[key];
+    if (!(book[p] > 0)) book[p] = freshQty(G, S, key === 'asks' ? S.thinA : S.thinB);
+    return book[p];
+  }
+  function ensureDepth(G, S, k) { for (let i = 0; i < k; i++) { ensureLevel(G, S, 'bids', S.bid - i); ensureLevel(G, S, 'asks', S.ask + i); } }
+  const midOf = (S) => (S.bid + S.ask) / 2;
+  const quote = (S) => ({ bid: S.bid, ask: S.ask, mid: midOf(S) });
 
-    const flow = new Array(N).fill(0);
-    for (let t = Math.floor(rnd(G) * 25); t < N;) {
-      const len = 20 + Math.floor(rnd(G) * 60), r = rnd(G), f = r < .18 ? 0 : (r < .59 ? 1 : -1), s = .4 + .6 * rnd(G);
-      for (let i = t; i < Math.min(N, t + len); i++) flow[i] = f * s;
-      t += len + 5 + Math.floor(rnd(G) * 20);
-    }
-    const jump = new Array(N + 1).fill(0), events = [];
-    if (per.text) {
-      const tEv = 60 + Math.floor(rnd(G) * 320), J = open * (Math.exp(per.shock) - 1);
-      JUMP_W.forEach((w, k) => { jump[tEv + 1 + k] += J * w; });
-      events.push({ t: tEv, text: per.text, jump: J, scripted: per.scripted });
-    }
-    const path = [open]; let m = open;
-    for (let i = 0; i < N; i++) { m += flow[i] * K_FLOW * sigStep + sigStep * 0.97 * gauss(G) + jump[i + 1]; path.push(m); }
-    const resid = close - path[N];
-    for (let i = 0; i <= N; i++) path[i] += resid * i / N;
-
-    const rel = TECH[G.tech].rel, shouts = [];
-    for (let i = 0; i < N; i++) {
-      if (rnd(G) >= .2) continue;
-      const f = Math.sign(flow[i]);
-      const side = f !== 0 && rnd(G) < rel ? f : (rnd(G) < .5 ? 1 : -1);
-      shouts.push([i, side, pick(G, [5, 10, 10, 20, 25, 50, 100])]);
-    }
-
-    let offer = null;
-    if (netWorth(G) >= 15000 && !G.sec && G.day - G.lastOffer >= 15 && rnd(G) < .10) {
-      const side = rnd(G) < .5 ? 1 : -1, t0 = 100 + Math.floor(rnd(G) * 250), lots = pick(G, [100, 150, 200, 300]);
-      const J = Math.round(side * (0.35 + 0.25 * rnd(G)) * open * per.sig * 1.5), jt = t0 + 30;
-      let cum = 0;
-      for (let i = 0; i <= N; i++) { const k = i - (jt + 1); if (k >= 0 && k < JUMP_W.length) cum += J * JUMP_W[k]; path[i] += cum; }
-      offer = { t: t0, side, lots, J, jt, bonus: lots * 2.5, resolved: null };
-      G.lastOffer = G.day;
-    }
-    G.sess = { sym, n: N, t: 0, path, shouts, events, offer, stop: 0, done: false, startEq: 0, wins: 0, trades: 0, scripted: !!per.scripted && !!per.text, aheadEntry: null };
-    G.sess.startEq = equity(G);
-    G.stats.sessions++;
-    if (sym === 'SPX') G.flags.spx = true;
-    if (sym === 'BOND') G.flags.bond = true;
-    return { ok: true };
+  function pushPrint(S, side, lots, px, who) {
+    S.prints.push([S.t, side, lots, px, who]);
+    if (S.prints.length > MAX_PRINTS) S.prints.shift();
   }
 
-  const markT = (G) => (!G.pos ? 0 : (G.sess && G.sess.sym === G.pos.sym ? G.sess.path[G.sess.t] : G.mk[G.pos.sym].close));
-  function unreal(G) { return G.pos ? (markT(G) - G.pos.entry) * G.pos.qty * CBY[G.pos.sym].tickVal : 0; }
-  const equity = (G) => G.cash + unreal(G);
-  const maxLots = (G, sym) => Math.max(0, Math.floor(equity(G) / CBY[sym].margin + 1e-9));
-
-  function trade(G, side, qty, forced) {
-    const S = G.sess;
-    if (!S || S.done || G.over) return { ok: false, msg: 'The pit is closed.' };
-    qty = Math.floor(qty);
-    if (qty < 1) return { ok: false, msg: 'Invalid size.' };
-    const c = CBY[S.sym], t = S.t, cur = G.pos ? G.pos.qty : 0, next = cur + side * qty;
-    const increasing = Math.abs(next) > Math.abs(cur);
-    if (!forced && increasing && Math.abs(next) > maxLots(G, S.sym)) {
-      return { ok: false, msg: `Margin: ${S.sym} needs ${money(c.margin)}/lot — you can hold ${maxLots(G, S.sym)}.` };
+  // Execute a market order against the book. Returns { filled, vwap }.
+  function sweep(G, S, side, lots, who) {
+    const key = side > 0 ? 'asks' : 'bids', book = S[key];
+    let rem = lots, cost = 0, filled = 0, guard = 600;
+    while (rem > 0 && guard--) {
+      const P = side > 0 ? S.ask : S.bid;
+      const L = ensureLevel(G, S, key, P);
+      const ord = S.orders.find((o) => o.price === P && o.side === -side && o.rem > 0);
+      const ahead = ord ? Math.min(ord.ahead, L) : 0, behind = L - ahead;
+      let w = rem;
+      const tA = Math.min(ahead, w); w -= tA;
+      const tM = ord ? Math.min(ord.rem, w) : 0; w -= tM;
+      const tB = Math.min(behind, w);
+      const taken = tA + tM + tB;
+      if (ord) { ord.ahead = ahead - tA; ord.rem -= tM; }
+      book[P] = L - tA - tB;
+      if (tM > 0) fillLimit(G, S, ord, tM);
+      cost += taken * P; filled += taken; rem -= taken;
+      if (book[P] <= 0 && (!ord || ord.rem <= 0)) { // level cleared: the price steps
+        delete book[P];
+        if (side > 0) { S.ask = P + 1; S.bid = P; if (!(S.bids[P] > 0)) S.bids[P] = freshQty(G, S, 0.7); ensureLevel(G, S, 'asks', S.ask); }
+        else { S.bid = P - 1; S.ask = P; if (!(S.asks[P] > 0)) S.asks[P] = freshQty(G, S, 0.7); ensureLevel(G, S, 'bids', S.bid); }
+      }
     }
-    const slip = Math.floor((qty - 1) / c.depth) + (forced ? 1 : 0);
-    const px = side > 0 ? bidT(S, t) + 1 + slip : bidT(S, t) - slip;
-    const fee = qty * TECH[G.tech].fee;
+    const vwap = filled ? cost / filled : (side > 0 ? S.ask : S.bid);
+    if (filled) { pushPrint(S, side, filled, vwap, who); S.volume += filled; S.last = vwap; }
+    S.orders = S.orders.filter((o) => o.rem > 0);
+    return { filled, vwap };
+  }
+
+  // Position accounting for any fill (market or limit).
+  function applyFill(G, S, side, qty, px, maker) {
+    const c = CBY[S.sym], cur = G.pos ? G.pos.qty : 0, next = cur + side * qty;
+    const fee = qty * TECH[G.tech].fee * (maker ? 0.5 : 1);
     let realized = 0, closeQ = 0;
     if (cur !== 0 && Math.sign(cur) !== side) {
       closeQ = Math.min(Math.abs(cur), qty);
@@ -293,8 +280,8 @@
     if (cur === 0 || Math.sign(cur) === side) {
       G.pos = { sym: S.sym, qty: next, entry: (cur === 0 ? px : (G.pos.entry * Math.abs(cur) + px * qty) / (Math.abs(cur) + qty)) };
     } else if (next === 0) G.pos = null;
-    else if (Math.sign(next) === Math.sign(cur)) G.pos.qty = next;       // partial close
-    else G.pos = { sym: S.sym, qty: next, entry: px };                    // flipped
+    else if (Math.sign(next) === Math.sign(cur)) G.pos.qty = next;
+    else G.pos = { sym: S.sym, qty: next, entry: px };
     G.cash += realized - fee; G.ytd += realized - fee;
     G.stats.realized += realized - fee; G.stats.fees += fee; G.stats.trades++; S.trades++;
     if (closeQ > 0) {
@@ -302,27 +289,161 @@
       if (net > 0) { G.stats.wins++; S.wins++; } else G.stats.losses++;
       if (S.wins >= 10) G.flags.scalper = true;
     }
+    return { realized, fee };
+  }
+
+  function fillLimit(G, S, ord, lots) {
+    applyFill(G, S, ord.side, lots, ord.price, true);
+    S.makerFills = (S.makerFills || 0) + lots;
+    pushPrint(S, ord.side, lots, ord.price, 'mine');
+  }
+
+  const markT = (G) => {
+    if (!G.pos) return 0;
+    if (G.sess && G.sess.sym === G.pos.sym) return midOf(G.sess);
+    return G.mk[G.pos.sym].close;
+  };
+  function unreal(G) { return G.pos ? (markT(G) - G.pos.entry) * G.pos.qty * CBY[G.pos.sym].tickVal : 0; }
+  const equity = (G) => G.cash + unreal(G);
+  const maxLots = (G, sym) => Math.max(0, Math.floor(equity(G) / CBY[sym].margin + 1e-9));
+
+  function startSession(G, sym) {
+    const c = CBY[sym];
+    if (G.over || G.sess) return { ok: false, msg: 'Not available.' };
+    if (!c || !G.unlocked[sym]) return { ok: false, msg: 'That pit is locked.' };
+    if (G.pos && G.pos.sym !== sym) return { ok: false, msg: `You're holding ${G.pos.sym}. Trade that pit to close it out.` };
+    const N = N_STEPS, per = G.today.per[sym], open = per.openT;
+    const S = {
+      sym, n: N, t: 0, open, target: per.closeT, sigT: Math.max(4, open * per.sig),
+      bid: open, ask: open + 1, bids: {}, asks: {}, thinA: 1, thinB: 1, imb: 0, volume: 0,
+      regime: { f: 0, s: 0, left: 0 }, hint: 0, burst: null, react: null, fundJ: 0, totJ: 0,
+      path: [open + 0.5], prints: [], last: open, events: [], orders: [], stop: 0, done: false,
+      startEq: 0, wins: 0, trades: 0, scripted: !!per.scripted && !!per.text, aheadEntry: null, offer: null, makerFills: 0,
+    };
+    G.sess = S;
+    ensureDepth(G, S, 5);
+    if (per.text) {
+      const tEv = 60 + Math.floor(rnd(G) * 320), J = open * (Math.exp(per.shock) - 1);
+      S.events.push({ t: tEv, text: per.text, jump: J, scripted: per.scripted });
+      S.totJ = J;
+    }
+    if (netWorth(G) >= 15000 && !G.sec && G.day - G.lastOffer >= 15 && rnd(G) < .10) {
+      const side = rnd(G) < .5 ? 1 : -1, t0 = 100 + Math.floor(rnd(G) * 250), lots = pick(G, [100, 150, 200, 300]);
+      S.offer = { t: t0, side, lots, jt: t0 + 30, bonus: lots * 2.5, resolved: null };
+      G.lastOffer = G.day;
+    }
+    S.startEq = equity(G);
+    G.stats.sessions++;
+    if (sym === 'SPX') G.flags.spx = true;
+    if (sym === 'BOND') G.flags.bond = true;
+    return { ok: true };
+  }
+
+  // ---- player orders
+  function trade(G, side, qty, forced) {
+    const S = G.sess;
+    if (!S || S.done || G.over) return { ok: false, msg: 'The pit is closed.' };
+    qty = Math.floor(qty);
+    if (qty < 1) return { ok: false, msg: 'Invalid size.' };
+    const c = CBY[S.sym], cur = G.pos ? G.pos.qty : 0, next = cur + side * qty;
+    if (!forced && Math.abs(next) > Math.abs(cur) && Math.abs(next) > maxLots(G, S.sym)) {
+      return { ok: false, msg: `Margin: ${S.sym} needs ${money(c.margin)}/lot — you can hold ${maxLots(G, S.sym)}.` };
+    }
+    const before = side > 0 ? S.ask : S.bid;
+    const { filled, vwap } = sweep(G, S, side, qty, 'me');
+    const r = applyFill(G, S, side, filled, vwap, false);
+    S.imb += side * filled / dpth(S) * 0.5;
+    // the crowd notices an aggressive player and briefly piles on
+    S.react = { dir: side, left: 6, str: Math.min(0.22, 0.12 * filled / dpth(S)) };
     const o = S.offer;
-    if (o && o.resolved === 'ahead' && !forced && side === o.side && t >= o.t && t <= o.jt && increasing && !S.aheadEntry) S.aheadEntry = { px, qty };
-    return { ok: true, px, realized, fee, msg: `${side > 0 ? 'Bought' : 'Sold'} ${qty} ${S.sym} @ ${fmtPrice(S.sym, px)}` };
+    if (o && o.resolved === 'ahead' && !forced && side === o.side && S.t >= o.t && S.t <= o.jt && Math.abs(next) > Math.abs(cur) && !S.aheadEntry) S.aheadEntry = { px: vwap, qty: filled };
+    const slipTicks = Math.abs(vwap - before);
+    return { ok: true, px: vwap, filled, slip: slipTicks, realized: r.realized, fee: r.fee, msg: `${side > 0 ? 'Bought' : 'Sold'} ${filled} ${S.sym} @ ${fmtPrice(S.sym, vwap)}` };
   }
   function flatten(G, forced) { return G.pos && G.sess ? trade(G, -Math.sign(G.pos.qty), Math.abs(G.pos.qty), forced) : { ok: false, msg: 'Already flat.' }; }
   function setStop(G, ticks) { if (G.sess) G.sess.stop = ticks; }
+
+  // resting limit order joined at the inside quote (back of the queue)
+  function placeLimit(G, side, qty) {
+    const S = G.sess;
+    if (!S || S.done || G.over) return { ok: false, msg: 'The pit is closed.' };
+    qty = Math.floor(qty);
+    if (qty < 1) return { ok: false, msg: 'Invalid size.' };
+    const cur = G.pos ? G.pos.qty : 0, c = CBY[S.sym];
+    if (Math.abs(cur + side * qty) > Math.abs(cur) && Math.abs(cur + side * qty) > maxLots(G, S.sym)) return { ok: false, msg: `Margin: you can hold ${maxLots(G, S.sym)} lots.` };
+    S.orders = S.orders.filter((o) => o.side !== side);
+    const key = side > 0 ? 'bids' : 'asks', price = side > 0 ? S.bid : S.ask;
+    const ahead = ensureLevel(G, S, key, price);
+    S.orders.push({ side, price, qty, rem: qty, ahead, t: S.t });
+    return { ok: true, msg: `${side > 0 ? 'Bid' : 'Offer'} ${qty} ${S.sym} @ ${fmtPrice(S.sym, price)} (${ahead} ahead of you)` };
+  }
+  // read-only estimate of what a market order of `qty` would cost right now
+  function preview(G, side, qty) {
+    const S = G.sess; if (!S) return { vwap: 0, slip: 0 };
+    const book = side > 0 ? S.asks : S.bids, D = dpth(S), best = side > 0 ? S.ask : S.bid;
+    let rem = qty, cost = 0, p = best, guard = 300;
+    while (rem > 0 && guard--) { const L = book[p] > 0 ? book[p] : D, t = Math.min(L, rem); cost += t * p; rem -= t; p += side > 0 ? 1 : -1; }
+    const vwap = cost / qty; return { vwap, slip: Math.abs(vwap - best) };
+  }
+  function cancelOrders(G) { const S = G.sess; if (!S) return; S.orders = []; }
+
   function respondOffer(G, choice) {
     const S = G.sess, o = S && S.offer;
     if (!o || o.resolved) return { ok: false, msg: 'No order.' };
     o.resolved = choice;
     if (choice === 'honest') { G.cash += o.bonus; G.ytd += o.bonus; return { ok: true, msg: `You filled the customer fairly and earned ${money(o.bonus)} in brokerage.` }; }
-    G.heat++;
-    return { ok: true, msg: 'You\'re trading ahead of the customer. Be quick — and pray nobody\'s watching.' };
+    if (choice === 'ahead') { G.heat++; return { ok: true, msg: 'You\'re trading ahead of the customer. Be quick — and pray nobody\'s watching.' }; }
+    return { ok: true, msg: '' };
   }
-  // pit sentiment: net signed size of shouts in the last `w` steps
+
+  // net signed size of crowd prints in the last `w` steps (the "tape")
   function recentFlow(G, w) {
     const S = G.sess; if (!S) return 0; let sum = 0;
-    for (let i = S.shouts.length - 1; i >= 0; i--) { const s = S.shouts[i]; if (s[0] > S.t) continue; if (s[0] <= S.t - w) break; sum += s[1] * s[2]; }
+    for (let i = S.prints.length - 1; i >= 0; i--) { const p = S.prints[i]; if (p[0] <= S.t - w) break; if (p[4] !== 'me' && p[4] !== 'mine') sum += p[1] * p[2]; }
     return sum;
   }
-  const shoutsNow = (G, n) => { const S = G.sess, out = []; if (!S) return out; for (let i = S.shouts.length - 1; i >= 0 && out.length < n; i--) if (S.shouts[i][0] <= S.t) out.push(S.shouts[i]); return out; };
+  const shoutsNow = (G, n) => { const S = G.sess; return S ? S.prints.slice(-n).reverse() : []; };
+  function ladder(G, k) {
+    const S = G.sess; if (!S) return { asks: [], bids: [] };
+    const asks = [], bids = [];
+    for (let i = k - 1; i >= 0; i--) { const p = S.ask + i; asks.push({ p, size: S.asks[p] || 0, mine: (S.orders.find((o) => o.price === p && o.side < 0) || {}).rem || 0 }); }
+    for (let i = 0; i < k; i++) { const p = S.bid - i; bids.push({ p, size: S.bids[p] || 0, mine: (S.orders.find((o) => o.price === p && o.side > 0) || {}).rem || 0 }); }
+    return { asks, bids };
+  }
+
+  function newRegime(G, S) {
+    const len = 20 + Math.floor(rnd(G) * 60), r = rnd(G), f = r < .2 ? 0 : (r < .6 ? 1 : -1), s = .4 + .6 * rnd(G);
+    S.regime = { f, s, left: len };
+    S.hint = rnd(G) < TECH[G.tech].rel ? f : (rnd(G) < .5 ? 1 : -1);
+  }
+
+  function replenish(G, S) {
+    const D = dpth(S);
+    for (const [key, p, thin] of [['bids', S.bid, S.thinB], ['asks', S.ask, S.thinA]]) {
+      let L = ensureLevel(G, S, key, p);
+      L += Math.round((D - L) * 0.15 * thin * rnd(G) * 2) + Math.round((rnd(G) - 0.5) * D * 0.15);
+      L = clamp(L, 1, Math.round(D * 2.5));
+      S[key][p] = L;
+      const ord = S.orders.find((o) => o.price === p && o.side === (key === 'bids' ? 1 : -1));
+      if (ord) ord.ahead = Math.min(ord.ahead, L);
+    }
+  }
+
+  function crowdOrder(G, S, burstFrac) {
+    const c = CBY[S.sym], t = S.t;
+    const fund = S.open + (S.target - S.totJ - S.open) * (t / S.n) + S.fundJ;
+    const gain = 0.35 + 1.6 * (t / S.n) * (t / S.n);
+    const pull = clamp(gain * (fund - midOf(S)) / S.sigT, -0.3, 0.3);
+    let p = 0.5 + REG_BIAS * S.regime.f * S.regime.s + pull;
+    if (S.burst) p += 0.35 * S.burst.dir * burstFrac;
+    if (S.react) p += S.react.dir * S.react.str * (S.react.left / 6);
+    p = clamp(p, 0.06, 0.94);
+    const side = rnd(G) < p ? 1 : -1;
+    let u = rnd(G), k = 0; while (k < SIZE_W.length - 1 && u > SIZE_W[k]) { u -= SIZE_W[k]; k++; }
+    const lots = Math.max(1, Math.round(dpth(S) * c.act * SIZE_F[k] * (1 + 1.5 * burstFrac)));
+    const r = sweep(G, S, side, lots, 'pit');
+    S.imb += side * r.filled / dpth(S);
+  }
 
   function stepSession(G) {
     const S = G.sess, events = [];
@@ -330,16 +451,40 @@
     if (S.offer && !S.offer.resolved && S.t >= S.offer.t) S.offer.resolved = 'ignored';
     S.t++;
     const t = S.t, c = CBY[S.sym];
-    for (const ev of S.events) if (ev.t === t) { addNews(G, 'mkt', ev.text); events.push({ kind: 'headline', text: ev.text, jump: ev.jump, scripted: ev.scripted }); }
+    for (const ev of S.events) if (ev.t === t) {
+      S.fundJ += ev.jump; S.burst = { dir: Math.sign(ev.jump) || 1, left: 16, max: 16 };
+      addNews(G, 'mkt', ev.text); events.push({ kind: 'headline', text: ev.text, jump: ev.jump, scripted: ev.scripted });
+    }
     const o = S.offer;
-    if (o && !o.resolved && o.t === t) events.push({ kind: 'offer', text: `Your broker flashes you a ${o.lots}-lot ${o.side > 0 ? 'BUY' : 'SELL'} order in ${c.name} — a big customer. It'll move the market in a few seconds. Fill it fairly for ${money(o.bonus)} brokerage… or trade ahead of it first?` });
+    if (o && !o.resolved && o.t === t) events.push({ kind: 'offer', text: `Your broker flashes you a ${o.lots}-lot ${o.side > 0 ? 'BUY' : 'SELL'} order in ${c.name} — a big customer. It will hit the book in a few seconds and sweep the price. Fill it fairly for ${money(o.bonus)} brokerage… or trade ahead of it first?` });
+
+    if (S.regime.left <= 0) newRegime(G, S);
+    S.regime.left--;
+    S.imb *= 0.93;
+    S.thinA = clamp(1 - 0.25 * Math.max(0, S.imb), 0.35, 1);
+    S.thinB = clamp(1 - 0.25 * Math.max(0, -S.imb), 0.35, 1);
+    replenish(G, S);
+
+    const burstFrac = S.burst ? S.burst.left / S.burst.max : 0, mult = 1 + 2 * burstFrac;
+    let n = rnd(G) < SHOUT_RATE * mult ? 1 : 0;
+    if (mult > 1.5 && rnd(G) < SHOUT_RATE * (mult - 1)) n++;
+    for (let i = 0; i < n; i++) crowdOrder(G, S, burstFrac);
+    if (o && o.resolved && t >= o.jt && t < o.jt + 4) { // the customer's block hits the book in chunks
+      const r = sweep(G, S, o.side, Math.ceil(o.lots / 4), 'block'); S.imb += o.side * r.filled / dpth(S);
+    }
+    if (S.burst && --S.burst.left <= 0) S.burst = null;
+    if (S.react && --S.react.left <= 0) S.react = null;
+    ensureDepth(G, S, 5);
+    S.path.push(midOf(S));
+
     if (o && o.resolved === 'ahead' && t === o.jt + 8) settleFrontRun(G, events);
     if (G.pos) {
+      const mid = midOf(S);
       if (equity(G) < MAINT * c.margin * Math.abs(G.pos.qty)) {
         flatten(G, true); G.flags.margin = true;
         const text = 'MARGIN CALL! Your clearing firm liquidated your position.';
         addNews(G, 'life', text); events.push({ kind: 'margin', text });
-      } else if (S.stop > 0 && (G.pos.entry - S.path[t]) * Math.sign(G.pos.qty) >= S.stop) {
+      } else if (S.stop > 0 && (G.pos.entry - mid) * Math.sign(G.pos.qty) >= S.stop) {
         flatten(G, true); G.flags.stop = true;
         events.push({ kind: 'stop', text: 'Stop-loss hit — position closed.' });
       }
@@ -351,7 +496,7 @@
   function settleFrontRun(G, events) {
     const S = G.sess, o = S.offer, a = S.aheadEntry;
     if (!a) { events.push({ kind: 'insider', text: 'You hesitated and didn\'t trade ahead. The customer order hit the market without you.' }); return; }
-    const gain = (S.path[S.t] - a.px) * o.side * a.qty * CBY[S.sym].tickVal;
+    const gain = (midOf(S) - a.px) * o.side * a.qty * CBY[S.sym].tickVal;
     if (gain > 0) {
       G.flags.frontWin = true;
       const p = .25 + .2 * (G.heat - 1);
@@ -362,9 +507,9 @@
   }
 
   function finishSession(G, events) {
-    const S = G.sess; S.done = true;
-    const sym = S.sym, closeT = Math.round(S.path[S.n]);
-    const closes = {}; closes[sym] = closeT;
+    const S = G.sess; S.done = true; S.orders = [];
+    const closeT = Math.round(midOf(S));
+    const closes = {}; closes[S.sym] = closeT;
     endOfDay(G, events, closes, S);
   }
 
@@ -595,10 +740,10 @@
 
   const api = {
     START_CASH, SELL_RATIO, SAVE_VERSION, TAX_RATE, MAINT, N_STEPS, STEP_MS, CONTRACTS, CBY, HOMES, CARS, TECH, LUX, RANKS, ACH, ERA_EVENTS,
-    newGame, startSession, stepSession, trade, flatten, setStop, respondOffer, skipDays, recentFlow, shoutsNow,
+    newGame, startSession, stepSession, trade, flatten, setStop, placeLimit, cancelOrders, preview, respondOffer, skipDays, recentFlow, shoutsNow, ladder, quote,
     buyItem, sellItem, moveHome, checkAchievements,
     netWorth, equity, unreal, maxLots, marginUsed, marginLevel, markT, monthlyCosts, monthlyIncome, rankOf, livingCost,
-    dateOfDay, clockOf, fmtPrice, priceOf, bidT,
+    dateOfDay, clockOf, fmtPrice, priceOf,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;

@@ -340,25 +340,37 @@
 
   function updateLive() {
     const S = G.sess; if (!S) return;
-    const sym = S.sym, c = E.CBY[sym], t = S.t, mid = S.path[t], bid = E.bidT(S, t), ask = bid + 1;
+    const sym = S.sym, c = E.CBY[sym], t = S.t, q = E.quote(S), mid = q.mid, bid = q.bid, ask = q.ask, D = c.depth;
     const open = S.path[0], chg = (mid - open) / open;
     $('pClock').textContent = E.clockOf(t) + ' CT';
     $('pProg').style.width = (t / S.n * 100) + '%';
-    $('pLast').textContent = fp(sym, Math.round(mid));
+    $('pLast').textContent = fp(sym, Math.round(S.last));
     $('pChg').textContent = pct(chg); $('pChg').className = 'mono ' + (chg >= 0 ? 'up' : 'down');
     $('pBA').textContent = `${fp(sym, bid)} × ${fp(sym, ask)}`;
-    $('pBuy').innerHTML = `BUY <small>${fp(sym, ask)}</small>`;
-    $('pSell').innerHTML = `SELL <small>${fp(sym, bid)}</small>`;
+    const qn = curQty(), pb = E.preview(G, 1, qn), ps = E.preview(G, -1, qn);
+    const slipTxt = (x) => (x.slip >= 0.5 ? ` · ${x.slip.toFixed(1)}t slip` : '');
+    $('pBuy').innerHTML = `BUY ${qn}<small>${fp(sym, Math.round(pb.vwap))}${slipTxt(pb)}</small>`;
+    $('pSell').innerHTML = `SELL ${qn}<small>${fp(sym, Math.round(ps.vwap))}${slipTxt(ps)}</small>`;
+    // order book ladder
+    const L = E.ladder(G, 3), mx = D * 2.5;
+    const row = (r, k) => `<div class="lv ${k}"><span class="lp">${fp(sym, r.p)}</span><span class="lbar"><i style="width:${Math.min(100, r.size / mx * 100)}%"></i></span><span class="ls">${r.size}${r.mine ? `<b> +${r.mine}</b>` : ''}</span></div>`;
+    $('pLadder').innerHTML = L.asks.map((r) => row(r, 'a')).join('') + L.bids.map((r) => row(r, 'b')).join('');
+    // flow gauge + floor intel
+    const flow = E.recentFlow(G, 30), norm = Math.max(-1, Math.min(1, flow / (D * 6)));
+    $('pGaugeFill').style.cssText = norm >= 0 ? `left:50%;width:${norm * 50}%;background:var(--up)` : `left:${50 + norm * 50}%;width:${-norm * 50}%;background:var(--down)`;
+    $('pHint').textContent = G.tech >= 1 ? 'Intel ' + (S.hint > 0 ? '▲' : S.hint < 0 ? '▼' : '–') : '';
     // shouts
-    const sh = E.shoutsNow(G, 6);
-    $('pShouts').innerHTML = sh.map((s) => `<div class="sh ${s[1] > 0 ? 'b' : 's'} ${s[2] >= 50 ? 'bigsh' : ''}">${s[1] > 0 ? 'BUY' : 'SELL'} ${s[2]}${s[2] >= 50 ? ' 🔥' : ''}</div>`).join('') || '<div class="sh dim">…quiet…</div>';
+    const sh = E.shoutsNow(G, 7);
+    $('pShouts').innerHTML = sh.map((s) => { const mine = s[4] === 'me' || s[4] === 'mine'; return `<div class="sh ${s[1] > 0 ? 'b' : 's'} ${s[2] >= D * 2 ? 'bigsh' : ''} ${mine ? 'mine' : ''}">${mine ? '★ ' : ''}${s[4] === 'block' ? 'PAPER ' : ''}${s[1] > 0 ? 'BUY' : 'SELL'} ${s[2]} <small>${fp(sym, Math.round(s[3]))}</small></div>`; }).join('') || '<div class="sh dim">…quiet…</div>';
     // position
     const p = G.pos, u = E.unreal(G), dayPnl = E.equity(G) - S.startEq;
+    const ords = S.orders.map((o) => `${o.side > 0 ? 'BID' : 'OFFER'} ${o.rem}@${fp(sym, o.price)}`).join(' · ');
     $('pPos').innerHTML = `<div>${p ? `<b class="${p.qty > 0 ? 'up' : 'down'}">${p.qty > 0 ? 'LONG' : 'SHORT'} ${Math.abs(p.qty)}</b> @ ${fp(sym, p.entry)}` : '<span class="dim">Flat</span>'}</div>
       <div>Open <b class="${cls(u)}">${sgn(u)}</b></div><div>Session <b class="${cls(dayPnl)}">${sgn(dayPnl)}</b></div>
-      <div class="dim">Max ${E.maxLots(G, sym)} lots</div>`;
+      <div class="dim">${ords || 'Max ' + E.maxLots(G, sym) + ' lots'}</div>`;
     $('pStop').textContent = 'Stop: ' + (STOPS[live.stopIdx] ? STOPS[live.stopIdx] + ' ticks' : 'Off');
     $('pFlat').disabled = !p || live.paused;
+    $('pCancel').disabled = !S.orders.length || live.paused; $('pBid').disabled = $('pOffer').disabled = live.paused;
     $('pFF').disabled = !!p || live.paused || !!(S.offer && !S.offer.resolved);
     $('pBuy').disabled = $('pSell').disabled = live.paused;
     drawChart();
@@ -383,7 +395,16 @@
       ctx.strokeStyle = '#ffb800'; ctx.beginPath(); ctx.moveTo(0, Y(G.pos.entry)); ctx.lineTo(W, Y(G.pos.entry)); ctx.stroke();
       if (S.stop) { const sv = G.pos.entry - Math.sign(G.pos.qty) * S.stop; ctx.strokeStyle = '#ff4d5e'; ctx.beginPath(); ctx.moveTo(0, Y(sv)); ctx.lineTo(W, Y(sv)); ctx.stroke(); }
     }
+    for (const o of S.orders) { ctx.strokeStyle = o.side > 0 ? '#2dff7a' : '#ff4d5e'; ctx.beginPath(); ctx.moveTo(W * 0.6, Y(o.price)); ctx.lineTo(W, Y(o.price)); ctx.stroke(); }
     ctx.setLineDash([]);
+    const D = E.CBY[S.sym].depth;
+    for (const pr of S.prints) { // order-flow bubbles: size = lots, color = aggressor side
+      const mine = pr[4] === 'me' || pr[4] === 'mine';
+      const r = Math.min(11, 2.5 + Math.sqrt(pr[2] / D) * 3.2) * dpr;
+      ctx.beginPath(); ctx.arc(X(pr[0]), Y(pr[3]), r, 0, 7);
+      if (mine) { ctx.lineWidth = 2.5 * dpr; ctx.strokeStyle = '#ffffff'; ctx.stroke(); }
+      else { ctx.fillStyle = pr[1] > 0 ? 'rgba(45,255,122,.45)' : 'rgba(255,77,94,.45)'; ctx.fill(); }
+    }
     ctx.fillStyle = col; ctx.beginPath(); ctx.arc(X(pts.length - 1), Y(pts[pts.length - 1]), 4 * dpr, 0, 7); ctx.fill();
   }
 
@@ -444,6 +465,10 @@
   const press = (id, fn) => $(id).addEventListener('pointerdown', (e) => { e.preventDefault(); fn(); });
   press('pBuy', () => doTrade(1));
   press('pSell', () => doTrade(-1));
+  const limit = (side) => { if (!G.sess || !live || live.paused || live.modalOpen) return; const r = E.placeLimit(G, side, curQty()); toast(r.msg); sfx(r.ok ? 'tap' : 'error'); updateLive(); };
+  press('pBid', () => limit(1));
+  press('pOffer', () => limit(-1));
+  press('pCancel', () => { if (G.sess) { E.cancelOrders(G); sfx('tap'); updateLive(); } });
   press('pFlat', () => { if (G.sess && live && !live.paused && G.pos) { const r = E.flatten(G); if (r.ok) { sfx('fill'); buzz(15); } updateLive(); } });
   $('pStop').addEventListener('click', () => { live.stopIdx = (live.stopIdx + 1) % STOPS.length; E.setStop(G, STOPS[live.stopIdx]); sfx('tap'); updateLive(); });
   $('pFF').addEventListener('click', skipToClose);
