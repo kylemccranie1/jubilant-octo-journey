@@ -2,131 +2,156 @@
 const E = require('../js/engine.js');
 const assert = require('assert');
 
-function run(name, seed, strat) {
-  const G = E.newGame(seed);
-  let weeks = 0;
-  while (!G.over && weeks < 700) {
-    strat(G);
-    E.advanceWeek(G); weeks++;
-    for (const t in G.stocks) assert(Number.isFinite(G.stocks[t].price), 'NaN price ' + t);
-    assert(Number.isFinite(G.cash), 'bad cash ' + G.cash);
-    assert(E.equity(G) > -1e7, 'absurd equity');
-  }
-  return { name, seed, weeks, over: G.over, nw: Math.round(E.netWorth(G)), peak: Math.round(G.stats.peak), ach: Object.keys(G.ach).length };
-}
-const idle = () => {};
-function holdTech(G) { if (G.week === 0) E.buy(G, 'MTRX', E.maxBuy(G, 'MTRX')); }
-function netBubble(G) {
-  const d = E.dateOf(G.week), y = d.getUTCFullYear();
-  if (y >= 1995 && !G.holdings.NNET && G.stocks.NNET.active && G.cash > 100) E.buy(G, 'NNET', E.maxBuy(G, 'NNET'));
-  if (y >= 2000 && G.week && d.getUTCMonth() === 2 && G.holdings.NNET) E.sell(G, 'NNET', G.holdings.NNET.shares);
-}
-function degen(G) { // all-in on random stock every week
-  for (const t of Object.keys(G.holdings)) E.sell(G, t, G.holdings[t].shares);
-  const act = E.STOCKS.filter((s) => G.stocks[s.t].active);
-  const s = act[Math.floor(Math.random() * act.length)];
-  E.buy(G, s.t, E.maxBuy(G, s.t));
-}
-function tipFollower(G) { // follow tips each week, sell everything else
-  for (const t of Object.keys(G.holdings)) E.sell(G, t, G.holdings[t].shares);
-  const tp = G.tips.find((x) => x.up);
-  if (tp) E.buy(G, tp.t, E.maxBuy(G, tp.t));
-}
-for (const seed of [1, 2, 3, 4, 5]) {
-  console.log(run('idle', seed, idle));
-  console.log(run('hold MTRX', seed, holdTech));
-  console.log(run('net bubble', seed, netBubble));
-  console.log(run('degen', seed, degen));
-}
-console.log(run('tipFollower(no gear)', 1, tipFollower));
-
-
-// lifestyle + repo flow
-{
-  const G = E.newGame(7);
-  G.cash = 2e6;
-  for (const [c, i] of [['home', 4], ['car', 4], ['tech', 3]]) assert(E.buyItem(G, c, i).ok, c);
-  assert(E.buyItem(G, 'lux', 'rolex').ok);
-  assert(!E.buyItem(G, 'car', 1).ok, 'no downgrade purchase');
-  G.cash = 5000; // crash
+// ---- play helpers
+function playSession(G, sym, bot) {
+  const r = E.startSession(G, sym); if (!r.ok) return [];
   const evs = [];
-  for (let i = 0; i < 12; i++) evs.push(...E.advanceWeek(G).events);
-  assert(evs.some((e) => e.kind === 'repo'), 'expected repo event');
-  assert(G.home < 4 || G.car < 4, 'lost something');
-  console.log('repo flow ok →', { home: G.home, car: G.car, tech: G.tech, lux: G.lux.length, cash: Math.round(G.cash), over: G.over });
+  if (bot.init) bot.init(G);
+  while (G.sess && !G.sess.done) {
+    const S = G.sess;
+    if (S.offer && !S.offer.resolved && S.t + 1 >= S.offer.t) { /* offer fires on next step */ }
+    const out = E.stepSession(G);
+    for (const e of out) {
+      evs.push(e);
+      if (e.kind === 'offer') E.respondOffer(G, bot.offer ? bot.offer(G) : 'honest');
+    }
+    if (G.sess && !G.sess.done && bot.tick) bot.tick(G);
+  }
+  return evs;
+}
+function career(name, seed, bot, opts = {}) {
+  const G = E.newGame(seed);
+  let sessions = 0, guard = 0;
+  while (!G.over && guard++ < 5000) {
+    if (bot.skip && bot.skip(G)) { E.skipDays(G, 1); continue; }
+    const sym = bot.pit ? bot.pit(G) : 'SOY';
+    const r = E.startSession(G, sym);
+    if (!r.ok) { E.skipDays(G, 1); continue; }
+    // (startSession already called; replay the loop inline)
+    if (bot.init) bot.init(G);
+    while (G.sess && !G.sess.done) {
+      const out = E.stepSession(G);
+      for (const e of out) if (e.kind === 'offer') E.respondOffer(G, bot.offer ? bot.offer(G) : 'honest');
+      if (G.sess && !G.sess.done && bot.tick) bot.tick(G);
+      assert(Number.isFinite(G.cash), 'cash NaN');
+    }
+    sessions++;
+  }
+  return { G, sessions };
 }
 
-function leveraged(G) { // always max leverage in a random stock
-  for (const t of Object.keys(G.holdings)) if (Math.random() < .2) E.sell(G, t, G.holdings[t].shares);
-  const act = E.STOCKS.filter((s) => G.stocks[s.t].active && !G.shorts[s.t]);
-  const s = act[Math.floor(Math.random() * act.length)];
-  E.buy(G, s.t, E.maxBuy(G, s.t));
-}
-function shortNetsAtCrash(G) {
-  const d = E.dateOf(G.week), y = d.getUTCFullYear(), m = d.getUTCMonth();
-  if (y === 2000 && m === 3 && !G.shorts.NNET && G.stocks.NNET.active && !G.holdings.NNET) E.short(G, 'NNET', E.maxShort(G, 'NNET'));
-  if (y === 2000 && m === 9 && G.shorts.NNET) E.cover(G, 'NNET', G.shorts.NNET.shares);
-  netBubble.__noSell = true;
-  if (y >= 1995 && y < 2000 && !G.holdings.NNET && G.stocks.NNET.active && G.cash > 100) E.buy(G, 'NNET', E.maxBuy(G, 'NNET'));
-  if (y === 2000 && m === 2 && G.holdings.NNET) E.sell(G, 'NNET', G.holdings.NNET.shares);
-}
-function indexer(G) { if (G.week === 0) E.buy(G, 'IDX', Math.floor((G.cash - E.commission(G)) / G.stocks.IDX.price)); }
-function insiderFan(G) { // accept every offer, go all-in the right way
-  if (G.offer) { const o = G.offer; E.acceptOffer(G); const t = o.t;
-    if (o.up) E.buy(G, t, E.maxBuy(G, t)); else E.short(G, t, E.maxShort(G, t)); }
-  else for (const t of Object.keys(G.holdings)) E.sell(G, t, G.holdings[t].shares);
-  if (!G.insider) { for (const t of Object.keys(G.shorts)) E.cover(G, t, G.shorts[t].shares); for (const t of Object.keys(G.holdings)) E.sell(G, t, G.holdings[t].shares); }
-}
-function tally(name, strat, n = 40) {
-  const res = { homeless: 0, prison: 0, end: 0, margin: 0, nws: [] };
+// ---- bots
+const flowBot = (lots = 2, thr = 60, stop = 14) => ({
+  init(G) { E.setStop(G, stop); this.entryT = -99; },
+  tick(G) {
+    const S = G.sess, f = E.recentFlow(G, 25);
+    if (!G.pos) { if (S.t < S.n - 30 && Math.abs(f) >= thr) { E.trade(G, Math.sign(f), Math.min(lots, E.maxLots(G, S.sym)) || 1); this.entryT = S.t; } }
+    else {
+      const against = Math.sign(f) !== Math.sign(G.pos.qty) && Math.abs(f) >= thr * 0.6;
+      if (against || S.t - this.entryT > 70 || S.t >= S.n - 3) E.flatten(G);
+    }
+  },
+  offer: () => 'honest',
+});
+const randomBot = (lots = 2) => ({
+  init(G) { E.setStop(G, 0); },
+  tick(G) {
+    const S = G.sess;
+    if (!G.pos && Math.random() < .03 && S.t < S.n - 40) E.trade(G, Math.random() < .5 ? 1 : -1, Math.min(lots, E.maxLots(G, S.sym)) || 1);
+    else if (G.pos && (Math.random() < .03 || S.t >= S.n - 3)) E.flatten(G);
+  },
+});
+const maxLev = { init(G) { E.setStop(G, 0); }, tick(G) { const S = G.sess; if (!G.pos && S.t === 5) E.trade(G, Math.random() < .5 ? 1 : -1, E.maxLots(G, S.sym) || 1); if (G.pos && S.t >= S.n - 2 && Math.random() < .5) E.flatten(G); } };
+const idleBot = { pit: () => 'SOY', skip: () => true };
+const best = (G) => CONTRACT_BY_NW(G);
+function CONTRACT_BY_NW(G) { let p = 'SOY'; for (const c of E.CONTRACTS) if (G.unlocked[c.sym]) p = c.sym; return p; }
+const grower = (inner) => Object.assign({}, inner, { pit: CONTRACT_BY_NW });
+
+// ---- tallies
+function tally(name, bot, n = 8) {
+  const res = { homeless: 0, prison: 0, end: 0, margin: 0, nws: [], t0: Date.now() };
   for (let i = 1; i <= n; i++) {
-    const G = E.newGame(100 + i); let w = 0;
-    while (!G.over && w < 700) { strat(G); E.advanceWeek(G); w++; }
+    const { G } = career(name, 500 + i, bot);
     res[G.over]++; if (G.flags.margin) res.margin++; res.nws.push(E.netWorth(G));
   }
   res.nws.sort((a, b) => a - b);
-  console.log(name.padEnd(12), `homeless ${res.homeless} prison ${res.prison} survived ${res.end} marginCalls ${res.margin}  median NW $${Math.round(res.nws[n >> 1]).toLocaleString()}  p90 $${Math.round(res.nws[Math.floor(n * .9)]).toLocaleString()}`);
+  console.log(name.padEnd(14), `homeless ${res.homeless} prison ${res.prison} survived ${res.end} marginCalls ${res.margin}  median NW $${Math.round(res.nws[n >> 1]).toLocaleString()}  best $${Math.round(res.nws[n - 1]).toLocaleString()}  (${((Date.now() - res.t0) / 1000).toFixed(1)}s)`);
 }
-console.log('--- 40-seed tallies');
-tally('idle', idle); tally('indexer', indexer); tally('leveraged', leveraged); tally('net+short', shortNetsAtCrash); tally('insiderFan', insiderFan); tally('degen', degen);
+console.log('--- tallies (8 careers each)');
+tally('idle', idleBot);
+tally('random', randomBot());
+tally('maxLeverage', maxLev);
+tally('flow 2 lots', flowBot(2));
+tally('flow grower', grower(flowBot(4)));
 
-// --- targeted mechanics
-{
-  const G = E.newGame(11);
-  G.cash = 20000; G.week = 60;
-  const p = G.stocks.MTRX.price;
-  assert(E.short(G, 'MTRX', 100).ok);
-  assert(!E.buy(G, 'MTRX', 1).ok, 'cannot buy while short');
-  G.stocks.MTRX.price = p * .8;
-  const before = G.stats.realized;
-  assert(E.cover(G, 'MTRX', 100).ok);
-  assert(G.stats.realized > before, 'short profit realized');
-  assert(Math.abs(G.ytd - (G.stats.realized)) < 1e-9, 'ytd tracks realized');
+// ---- targeted mechanics
+function runToClose(G) { const evs = []; while (G.sess && !G.sess.done) evs.push(...E.stepSession(G)); return evs; }
+{ // basic trade accounting: buy then sell, P&L matches ticks, fees charged
+  const G = E.newGame(21); E.startSession(G, 'SOY');
+  for (let i = 0; i < 5; i++) E.stepSession(G);
+  const before = G.cash, r1 = E.trade(G, 1, 2), r2 = E.trade(G, -1, 2);
+  assert(r1.ok && r2.ok && !G.pos, 'round trip flat');
+  const ticks = r2.px - r1.px; // ≤ -1 on a quiet market (pays the spread)
+  assert(Math.abs((G.cash - before) - (ticks * 2 * 12.5 - 4 * 3.0)) < 1e-6, 'pnl = ticks*val - fees');
+  assert(!E.trade(G, 1, 50).ok, 'margin limit blocks oversize');
 }
-{ // margin: leveraged long, crash, forced liquidation
-  const G = E.newGame(12); G.cash = 10000;
-  const n = E.maxBuy(G, 'GULF'); assert(E.buy(G, 'GULF', n).ok); assert(G.cash < 0, 'on margin');
-  assert(!E.buy(G, 'GULF', 50).ok, 'limit enforced');
-  G.stocks.GULF.price *= .5; // -50%
-  G.next.rets = {}; const ev = E.advanceWeek(G).events;
-  assert(ev.some((e) => e.kind === 'margin'), 'margin call'); assert(!G.holdings.GULF, 'liquidated');
+{ // margin call: max-size position, force a crash path
+  const G = E.newGame(22); E.startSession(G, 'SOY');
+  E.stepSession(G); assert(E.trade(G, 1, E.maxLots(G, 'SOY')).ok);
+  const S = G.sess; for (let i = S.t + 1; i <= S.n; i++) S.path[i] = S.path[S.t] - 400; // -400 ticks
+  const evs = runToClose(G);
+  assert(evs.some((e) => e.kind === 'margin'), 'margin call fired'); assert(!G.pos, 'flat after margin call');
 }
-{ // tax: gain in 1990, bill in Jan 1991 -> April payment
-  const G = E.newGame(13); G.cash = 50000; G.ytd = 40000; G.week = 51; // late Dec 1990
-  G.billMonth = 11 + 12 * 1990; G.next.week = 52;
-  let paid = false;
-  for (let i = 0; i < 20; i++) { E.advanceWeek(G); if (G.flags.taxPaid) paid = true; }
-  assert(paid && Math.abs(G.flags.taxPaid - 40000 * E.TAX_RATE) < 1, 'tax paid ' + G.flags.taxPaid);
+{ // stop-loss closes position
+  const G = E.newGame(23); E.startSession(G, 'SOY'); E.stepSession(G);
+  E.trade(G, 1, 1); E.setStop(G, 8);
+  const S = G.sess; for (let i = S.t + 1; i <= S.n; i++) S.path[i] = S.path[S.t] - 20;
+  const evs = []; for (let i = 0; i < 5; i++) evs.push(...E.stepSession(G));
+  assert(evs.some((e) => e.kind === 'stop') && !G.pos, 'stopped out');
 }
-{ // insider -> SEC fine -> prison on repeat
-  const G = E.newGame(14); G.cash = 100000;
-  G.offer = { t: 'GULF', up: true, mv: .4 }; E.acceptOffer(G);
-  E.buy(G, 'GULF', 500); E.advanceWeek(G);
-  assert(G.flags.insiderWin, 'insider profit');
-  G.sec = { at: G.week + 1, profit: 20000 }; E.advanceWeek(G);
-  assert(G.fined && !G.over, 'fined');
-  G.sec = { at: G.week + 1, profit: 20000 }; E.advanceWeek(G);
-  assert(G.over === 'prison', 'prison on 2nd');
+{ // overnight position is settled daily and carried; other pit blocked
+  const G = E.newGame(24); E.startSession(G, 'SOY'); E.stepSession(G); E.trade(G, 1, 1);
+  const entry = G.pos.entry; runToClose(G);
+  assert(G.pos && G.pos.qty === 1 && G.pos.entry === G.mk.SOY.close, 'carried at settle');
+  assert(!E.startSession(G, 'CRUDE').ok, 'cannot start other pit while holding (and CRUDE locked)');
+  E.skipDays(G, 5); assert(G.pos.entry === G.mk.SOY.close, 'settles through skipped days');
 }
-{ const G = E.newGame(15); const ev = E.checkAchievements(G); assert(Array.isArray(ev)); E.buy(G, 'IDX', 10); assert(E.checkAchievements(G).some((a) => a.id === 'first')); }
+{ // unlocks
+  const G = E.newGame(25); G.cash = 20000; const evs = E.skipDays(G, 1);
+  assert(G.unlocked.CRUDE && evs.some((e) => e.kind === 'unlock'), 'crude unlocked at $12k');
+}
+{ // repo then homeless via bills (no trading, no cash)
+  const G = E.newGame(26); G.cash = 2e6; assert(E.buyItem(G, 'home', 4).ok && E.buyItem(G, 'car', 4).ok);
+  G.cash = 1000; const evs = []; for (let i = 0; i < 60 && !G.over; i++) evs.push(...E.skipDays(G, 21));
+  assert(evs.some((e) => e.kind === 'repo'), 'repo event'); assert(G.over === 'homeless', 'ends homeless');
+}
+{ // tax: gain in a year -> bill in April
+  const G = E.newGame(27); G.cash = 60000; G.ytd = 40000;
+  let paid = false; for (let i = 0; i < 360 && !paid; i++) { E.skipDays(G, 1); if (G.flags.taxPaid) paid = true; }
+  assert(paid && Math.abs(G.flags.taxPaid - 40000 * E.TAX_RATE) < 5000, 'tax paid ' + G.flags.taxPaid);
+}
+{ // front-running: offer -> trade ahead -> profit -> SEC fine -> second time prison
+  let tried = 0, ok = false;
+  for (let seed = 1; seed < 400 && !ok; seed++) {
+    const G = E.newGame(seed); G.cash = 40000; G.unlocked.SOY = true; tried++;
+    for (let d = 0; d < 80 && !G.over && !ok; d++) {
+      E.startSession(G, 'SOY');
+      while (G.sess && !G.sess.done) {
+        const out = E.stepSession(G);
+        for (const e of out) if (e.kind === 'offer') {
+          const o = G.sess.offer; E.respondOffer(G, 'ahead');
+          assert(E.trade(G, o.side, 20).ok, 'front-run trade');
+          for (let i = 0; i < 45; i++) { E.stepSession(G); } // through the jump
+          assert(G.flags.frontWin !== undefined);
+          ok = true;
+        }
+        if (ok) break;
+      }
+      if (ok) { if (G.pos) E.flatten(G); runToClose(G); assert(G.heat === 1, 'heat'); G.sec = { at: G.day + 1, profit: 2000 }; E.skipDays(G, 2); assert(G.fined && !G.over, 'fined'); G.sec = { at: G.day + 1, profit: 2000 }; E.skipDays(G, 2); assert(G.over === 'prison', 'prison'); }
+      else if (G.sess) runToClose(G);
+    }
+  }
+  assert(ok, 'saw a front-run offer in ' + tried + ' careers');
+}
+{ const G = E.newGame(31); const f = E.checkAchievements(G); E.startSession(G, 'SOY'); E.stepSession(G); E.trade(G, 1, 1); assert(E.checkAchievements(G).some((a) => a.id === 'first')); }
 console.log('OK');

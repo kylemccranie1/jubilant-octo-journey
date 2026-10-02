@@ -1,78 +1,98 @@
-/* Wall Street '90 — game engine (pure logic, no DOM). Works in browser and Node. */
+/* The Pit '90 — game engine (pure logic, no DOM). Works in browser and Node. */
 (function (root) {
   'use strict';
 
   const START_CASH = 8000;
   const START_MS = Date.UTC(1990, 0, 1);
   const END_MS = Date.UTC(2001, 0, 1);
-  const WEEK_MS = 7 * 864e5;
   const SELL_RATIO = 0.6;
-  const HIST_LEN = 104;
-  const TAX_RATE = 0.28;       // 1990s top capital-gains rate
-  const MARGIN_RATE = 0.09;    // annual interest on margin debt
-  const MAINT = 0.25;          // maintenance margin (equity / gross exposure)
-  const SAVE_VERSION = 2;
+  const TAX_RATE = 0.28;
+  const MAINT = 0.75;          // maintenance margin = 75% of initial
+  const N_STEPS = 520;         // price ticks per trading session
+  const STEP_MS = 150;         // real-time ms per step (UI pacing)
+  const SAVE_VERSION = 3;
+  const K_FLOW = 0.22;         // strength of order-flow drift (in session-sigma units per step)
 
-  const weekOf = (y, m, d) => Math.floor((Date.UTC(y, m - 1, d) - START_MS) / WEEK_MS);
-  const dateOf = (week) => new Date(START_MS + week * WEEK_MS);
-  const monthIdx = (week) => { const d = dateOf(week); return d.getUTCFullYear() * 12 + d.getUTCMonth(); };
+  // ---------------------------------------------------------------- calendar (weekdays only)
+  const dateOfDay = (day) => { const k = day + 1, w = Math.floor(k / 5), dow = k % 5; return new Date(START_MS + (w * 7 + dow) * 864e5); };
+  const monthIdxOfDay = (day) => { const d = dateOfDay(day); return d.getUTCFullYear() * 12 + d.getUTCMonth(); };
+  const dayOfDate = (y, m, d) => { // first trading day on/after the calendar date
+    const target = Date.UTC(y, m - 1, d); let day = Math.max(0, Math.floor((target - START_MS) / 864e5 * 5 / 7) - 3);
+    while (dateOfDay(day).getTime() < target) day++;
+    return day;
+  };
+  const clockOf = (t) => { const mins = Math.floor(t / N_STEPS * 390) + 8 * 60 + 30; return `${Math.floor(mins / 60)}:${String(mins % 60).padStart(2, '0')}`; }; // CT session 8:30-15:00
 
-  // ---------------------------------------------------------------- content
-  const STOCKS = [
-    { t: 'IDX', name: 'Big Board Index Fund', sector: 'idx', beta: 1.0, vol: .12, p0: 35 },
-    { t: 'MTRX', name: 'Microtronix', sector: 'tech', beta: 1.3, vol: .38, p0: 42 },
-    { t: 'CSFT', name: 'CompuSoft', sector: 'tech', beta: 1.4, vol: .40, p0: 25 },
-    { t: 'GULF', name: 'Gulf Crown Oil', sector: 'energy', beta: .6, vol: .24, p0: 38 },
-    { t: 'FRDM', name: 'Freedom Bancorp', sector: 'bank', beta: .9, vol: .24, p0: 24 },
-    { t: 'BRGR', name: 'Big Burger Co.', sector: 'cons', beta: .5, vol: .17, p0: 55 },
-    { t: 'AMRJ', name: 'American Jetways', sector: 'air', beta: 1.2, vol: .36, p0: 18 },
-    { t: 'GENX', name: 'GenoMax Pharma', sector: 'bio', beta: 1.0, vol: .55, p0: 12 },
-    { t: 'STAR', name: 'Starlight Pictures', sector: 'media', beta: 1.0, vol: .30, p0: 30 },
-    { t: 'TELC', name: 'TelCom Bell', sector: 'tele', beta: .7, vol: .20, p0: 48 },
-    { t: 'MOTR', name: 'Detroit Motors', sector: 'auto', beta: 1.1, vol: .28, p0: 20 },
-    { t: 'GOLD', name: 'GoldRush Mining', sector: 'pen', beta: .8, vol: .65, p0: 3.5 },
-    { t: 'NNET', name: 'NetNebula', sector: 'net', beta: 1.6, vol: .85, p0: 14, ipo: weekOf(1995, 8, 9) },
-    { t: 'BUYZ', name: 'Buyz.com', sector: 'net', beta: 1.6, vol: .90, p0: 16, ipo: weekOf(1997, 5, 19) },
-    { t: 'WOOF', name: 'Woof.com', sector: 'net', beta: 1.7, vol: 1.0, p0: 11, ipo: weekOf(1999, 2, 8) },
-    { t: 'GROC', name: 'GroceryGo', sector: 'net', beta: 1.7, vol: 1.0, p0: 18, ipo: weekOf(1999, 9, 13) },
+  // ---------------------------------------------------------------- contracts
+  // anchors: approximate real price history; the game's price wanders around this path
+  const A = (y, m, p) => [Date.UTC(y, m - 1, 1), p];
+  const CONTRACTS = [
+    { sym: 'SOY', name: 'Soybeans', pit: 'CBOT Grain Pit', emoji: '🌱', tick: .25, tickVal: 12.5, vol: .011, margin: 1000, depth: 15, unlock: 0,
+      anchors: [A(1990, 1, 570), A(1991, 1, 600), A(1993, 1, 580), A(1993, 8, 700), A(1994, 6, 660), A(1996, 6, 800), A(1997, 6, 830), A(1998, 6, 640), A(1999, 6, 480), A(2000, 6, 530), A(2000, 12, 520)] },
+    { sym: 'CRUDE', name: 'Crude Oil', pit: 'NYMEX Energy Pit', emoji: '🛢️', tick: .01, tickVal: 10, vol: .018, margin: 2000, depth: 12, unlock: 12000,
+      anchors: [A(1990, 1, 21), A(1990, 7, 17), A(1990, 10, 37), A(1991, 2, 20), A(1992, 6, 21), A(1994, 6, 18), A(1996, 12, 25), A(1998, 12, 11), A(1999, 12, 25), A(2000, 9, 33), A(2000, 12, 26)] },
+    { sym: 'DM', name: 'Deutschmark', pit: 'CME Currency Pit', emoji: '💶', tick: .0001, tickVal: 12.5, vol: .006, margin: 2000, depth: 12, unlock: 30000,
+      anchors: [A(1990, 1, .60), A(1992, 9, .70), A(1993, 6, .62), A(1995, 4, .73), A(1997, 7, .54), A(1999, 1, .59), A(2000, 10, .43), A(2000, 12, .46)] },
+    { sym: 'BOND', name: 'T-Bonds', pit: 'CBOT Financial Pit', emoji: '📜', tick: 1 / 32, tickVal: 31.25, vol: .006, margin: 3000, depth: 10, unlock: 80000,
+      anchors: [A(1990, 1, 91), A(1991, 6, 97), A(1993, 10, 117), A(1994, 11, 98), A(1995, 12, 118), A(1996, 6, 108), A(1998, 10, 126), A(2000, 1, 98), A(2000, 12, 112)] },
+    { sym: 'SPX', name: 'S&P 500', pit: 'CME Index Pit', emoji: '📈', tick: .05, tickVal: 25, vol: .009, margin: 9000, depth: 8, unlock: 250000,
+      anchors: [A(1990, 1, 353), A(1990, 10, 295), A(1991, 6, 375), A(1992, 6, 410), A(1994, 6, 450), A(1995, 6, 540), A(1996, 6, 670), A(1997, 6, 880), A(1998, 6, 1130), A(1998, 10, 960), A(1999, 6, 1330), A(2000, 3, 1500), A(2000, 12, 1320)] },
   ];
+  const CBY = {}; CONTRACTS.forEach((c) => { CBY[c.sym] = c; });
+  const ERA_VOL = { 1990: .20, 1991: .15, 1992: .13, 1993: .10, 1994: .14, 1995: .10, 1996: .13, 1997: .17, 1998: .22, 1999: .20, 2000: .28 };
 
-  // [annual market drift, annual market vol]
-  const ERA = {
-    1990: [-.05, .20], 1991: [.26, .15], 1992: [.05, .13], 1993: [.08, .10], 1994: [.0, .14],
-    1995: [.30, .10], 1996: [.20, .13], 1997: [.28, .17], 1998: [.25, .22], 1999: [.18, .20], 2000: [-.08, .28],
-  };
+  function priceOf(sym, ticks) { return ticks * CBY[sym].tick; }
+  function fmtPrice(sym, ticks) {
+    const p = ticks * CBY[sym].tick;
+    switch (sym) {
+      case 'SOY': return p.toFixed(2);
+      case 'CRUDE': return '$' + p.toFixed(2);
+      case 'DM': return p.toFixed(4);
+      case 'BOND': { let pts = Math.floor(p + 1e-9), f = Math.round((p - pts) * 32); if (f === 32) { pts++; f = 0; } return pts + '-' + String(f).padStart(2, '0'); }
+      default: return p.toFixed(2);
+    }
+  }
+  function anchorPrice(sym, ms) {
+    const a = CBY[sym].anchors;
+    if (ms <= a[0][0]) return a[0][1];
+    for (let i = 1; i < a.length; i++) {
+      if (ms <= a[i][0]) {
+        const f = (ms - a[i - 1][0]) / (a[i][0] - a[i - 1][0]);
+        return Math.exp(Math.log(a[i - 1][1]) * (1 - f) + Math.log(a[i][1]) * f);
+      }
+    }
+    return a[a.length - 1][1];
+  }
 
-  // extra annual drift per sector
-  const TILT = {
-    tech: { def: .03, 1990: -.05, 1995: .20, 1996: .15, 1997: .25, 1998: .30, 1999: .60, 2000: -.10 },
-    net: { def: 0, 1995: .4, 1996: .6, 1997: .8, 1998: 1.0, 1999: 2.0, 2000: -.6 },
-    bio: { def: .06, 1992: -.12, 1999: .25 },
-    air: { def: 0, 1990: -.15, 1998: .15 },
-    energy: { def: 0 }, bank: { def: .02 }, cons: { def: .03 }, media: { def: .03 },
-    tele: { def: .03 }, auto: { def: 0 }, pen: { def: 0 }, idx: { def: 0 },
-  };
-
-  // scripted historical events: shocks are immediate % moves; mom = extra weekly drift for n weeks
+  // scripted history: impact = log-return shock per contract
+  const E_ = (y, m, d, text, imp) => ({ day: null, at: [y, m, d], text, imp });
   const ERA_EVENTS = [
-    { at: [1990, 8, 6], text: 'IRAQ INVADES KUWAIT! Oil spikes, stocks tumble.', mkt: -.04, sec: { energy: .12, air: -.10 }, mom: { mkt: [8, -.008], energy: [8, .01] } },
-    { at: [1991, 1, 14], text: 'Operation Desert Storm begins — Wall Street rallies!', mkt: .06, sec: { energy: -.08, air: .08 }, mom: { mkt: [6, .005] } },
-    { at: [1992, 9, 14], text: 'Black Wednesday: Soros breaks the pound. Banks wobble.', mkt: -.02, sec: { bank: -.04 } },
-    { at: [1992, 11, 2], text: 'Clinton wins. Healthcare reform fears hammer biotech.', mkt: .0, sec: { bio: -.08 }, mom: { bio: [6, -.01] } },
-    { at: [1994, 2, 7], text: 'FED HIKES RATES! Bond market bloodbath.', mkt: -.04, sec: { bank: -.05 }, mom: { mkt: [8, -.004] } },
-    { at: [1994, 12, 19], text: 'Mexican peso collapses. Investors flee emerging markets.', mkt: -.02, sec: {} },
-    { at: [1995, 8, 9], text: 'NetNebula IPO soars! The Internet gold rush begins.', mkt: .01, sec: { net: .05 }, mom: { net: [10, .02] } },
-    { at: [1996, 12, 5], text: 'Greenspan frets about "irrational exuberance". Markets dip.', mkt: -.025, sec: { tech: -.02, net: -.04 } },
-    { at: [1997, 10, 27], text: 'ASIAN CRISIS! Dow plunges 554 points in a day.', mkt: -.07, sec: { bank: -.04 } },
-    { at: [1997, 11, 3], text: 'Dip buyers pile in. Markets rebound hard.', mkt: .04, sec: {}, mom: { mkt: [4, .006] } },
-    { at: [1998, 8, 17], text: 'RUSSIA DEFAULTS! Hedge funds in trouble.', mkt: -.05, sec: { bank: -.08, energy: -.05 } },
-    { at: [1998, 9, 28], text: 'LTCM bailout engineered. Credit markets panic.', mkt: -.03, sec: { bank: -.05 } },
-    { at: [1998, 10, 19], text: 'Fed cuts rates. Dot-com rally ignites!', mkt: .05, sec: { net: .10, tech: .05 }, mom: { mkt: [8, .008], net: [10, .03] } },
-    { at: [1999, 12, 27], text: 'Y2K fever: tech stocks melt up into the millennium.', mkt: .02, sec: { tech: .04, net: .08 } },
-    { at: [2000, 3, 13], text: 'NASDAQ tops 5,000. "This time is different," say the pundits.', mkt: .01, sec: { net: .08 } },
-    { at: [2000, 4, 3], text: 'DOT-COM CRASH! Antitrust ruling sparks tech wipeout.', mkt: -.04, sec: { net: -.15, tech: -.10 }, mom: { net: [20, -.04], tech: [14, -.02] } },
-    { at: [2000, 12, 11], text: 'Presidential election deadlocked in Florida. Markets jittery.', mkt: -.02, sec: {} },
+    E_(1990, 8, 6, 'IRAQ INVADES KUWAIT! Crude spikes, stocks tumble.', { CRUDE: .12, SPX: -.03, SOY: .01, BOND: .008, DM: .005 }),
+    E_(1991, 1, 17, 'DESERT STORM BEGINS! Crude collapses, stocks rip.', { CRUDE: -.30, SPX: .045, BOND: -.005 }),
+    E_(1992, 9, 16, 'BLACK WEDNESDAY! Soros breaks the pound; the Mark soars.', { DM: .02, SPX: -.01 }),
+    E_(1993, 7, 12, 'GREAT FLOOD OF \'93 devastates Midwest crops. Beans limit up!', { SOY: .06 }),
+    E_(1994, 2, 4, 'FED HIKES RATES! Bond market bloodbath.', { BOND: -.02, SPX: -.022 }),
+    E_(1994, 12, 20, 'Mexican peso collapses. Flight to safety.', { SPX: -.01, DM: .005, BOND: .006 }),
+    E_(1995, 3, 6, 'Dollar plunges against the Deutschmark!', { DM: .02 }),
+    E_(1996, 12, 5, 'Greenspan warns of "irrational exuberance". Markets dive.', { SPX: -.02, BOND: -.01 }),
+    E_(1997, 8, 18, 'Dollar surges; the Mark gets hammered.', { DM: -.02 }),
+    E_(1997, 10, 27, 'ASIAN CRISIS! Dow plunges 554 points. Circuit breakers trip!', { SPX: -.07, BOND: .02, CRUDE: -.03 }),
+    E_(1997, 10, 28, 'Dip buyers storm back. Biggest point rally ever.', { SPX: .045 }),
+    E_(1998, 8, 17, 'RUSSIA DEFAULTS! Hedge funds in trouble.', { SPX: -.04, BOND: .02, CRUDE: -.04 }),
+    E_(1998, 10, 15, 'Fed cuts rates in surprise move. Stocks surge!', { SPX: .04, BOND: .02 }),
+    E_(2000, 4, 14, 'NASDAQ CRASH! Dot-com wipeout drags the S&P.', { SPX: -.06 }),
+    E_(2000, 9, 25, 'OPEC fumbles; crude spikes to a ten-year high.', { CRUDE: .05 }),
   ];
+  ERA_EVENTS.forEach((e) => { e.day = dayOfDate(...e.at); });
+  const eventsByDay = {}; ERA_EVENTS.forEach((e) => { (eventsByDay[e.day] = eventsByDay[e.day] || []).push(e); });
+
+  const NEWS_TEMPLATES = {
+    SOY: [['USDA report: yields ABOVE expectations. Beans slide.', -1, .02], ['USDA report: crop smaller than expected. Beans jump!', 1, .02], ['China buys a big chunk of the crop.', 1, .015]],
+    CRUDE: [['API inventories: BIG BUILD. Crude drops.', -1, .025], ['API inventories: surprise DRAW. Crude pops.', 1, .025], ['Pipeline outage rattles the energy pit.', 1, .02]],
+    DM: [['Bundesbank sounds hawkish. Mark rallies.', 1, .008], ['Bundesbank dovish. Mark slips.', -1, .008], ['German reunification costs worry the Mark.', -1, .007]],
+    BOND: [['Fed speaker hints at tighter policy. Bonds sell off.', -1, .008], ['Soft jobs report. Bonds rally.', 1, .008], ['Inflation print hot. Long end hammered.', -1, .01]],
+    SPX: [['Blue-chip earnings blow past estimates!', 1, .01], ['Profit warning from a Dow component.', -1, .01], ['Takeover chatter fuels a rally.', 1, .008]],
+  };
 
   const HOMES = [
     { id: 0, name: 'Roach-Motel Studio', emoji: '🪳', rent: 300, desc: 'Thin walls, thinner wallet. Everyone starts somewhere.' },
@@ -91,14 +111,16 @@
     { id: 5, name: 'Ferrari Testarossa', emoji: '🔴', price: 190000, upkeep: 1500, desc: 'Side strakes. Miami Vice approved.' },
     { id: 6, name: 'Stretch Limo + Driver', emoji: '🛻', price: 400000, upkeep: 5000, desc: 'Moonroof for waving at peasants.' },
   ];
+  // Floor gear: per-side clearing fee, how truthful the pit's shouting is (rel), and daily tips
   const TECH = [
-    { id: 0, name: 'Rotary Phone & WSJ', emoji: '☎️', price: 0, upkeep: 0, comm: 45, tips: 0, acc: 0, desc: 'Call the broker, wait on hold. No tips.' },
-    { id: 1, name: 'Motorola Brick Phone', emoji: '📱', price: 1500, upkeep: 50, comm: 35, tips: 1, acc: .55, desc: 'Cheaper trades + 1 rumor a week (55% right).' },
-    { id: 2, name: 'IBM PC + Prodigy Modem', emoji: '🖥️', price: 4500, upkeep: 80, comm: 25, tips: 1, acc: .60, desc: 'Dial-up screech. 1 tip/week (60%).' },
-    { id: 3, name: 'Quotron Terminal', emoji: '📟', price: 15000, upkeep: 250, comm: 15, tips: 2, acc: .66, desc: 'Real-time quotes. 2 tips/week (66%).' },
-    { id: 4, name: 'Bloomberg Desk (4 monitors)', emoji: '🖲️', price: 70000, upkeep: 900, comm: 8, tips: 2, acc: .72, desc: 'Wall of screens. 2 tips/week (72%).' },
-    { id: 5, name: 'Private Trading Floor', emoji: '🏛️', price: 350000, upkeep: 5000, comm: 3, tips: 3, acc: .80, desc: 'Analysts on payroll. 3 tips/week (80%).' },
+    { id: 0, name: 'Rotary Phone & WSJ', emoji: '☎️', price: 0, upkeep: 0, fee: 3.0, rel: .55, tips: 0, desc: 'Standard clearing fees ($3.00/side). Pit chatter only 55% reliable.' },
+    { id: 1, name: 'Motorola Brick Phone', emoji: '📱', price: 1500, upkeep: 50, fee: 2.4, rel: .62, tips: 1, desc: '$2.40/side. Chatter 62% reliable + 1 morning tip.' },
+    { id: 2, name: 'IBM PC + Prodigy Modem', emoji: '🖥️', price: 4500, upkeep: 80, fee: 1.8, rel: .68, tips: 1, desc: '$1.80/side. Chatter 68% reliable + 1 tip.' },
+    { id: 3, name: 'Quotron Terminal', emoji: '📟', price: 15000, upkeep: 250, fee: 1.2, rel: .74, tips: 2, desc: '$1.20/side. Chatter 74% reliable + 2 tips.' },
+    { id: 4, name: 'Bloomberg Desk (4 monitors)', emoji: '🖲️', price: 70000, upkeep: 900, fee: .8, rel: .82, tips: 2, desc: '$0.80/side. Chatter 82% reliable + 2 tips.' },
+    { id: 5, name: 'Private Trading Floor', emoji: '🏛️', price: 350000, upkeep: 5000, fee: .4, rel: .90, tips: 3, desc: '$0.40/side. Chatter 90% reliable + 3 tips.' },
   ];
+
   const LUX = [
     { id: 'jacket', name: 'Members Only Jacket', emoji: '🧥', price: 250, upkeep: 0, desc: 'Epaulets and attitude.' },
     { id: 'suit', name: 'Armani Power Suit', emoji: '🕴️', price: 3000, upkeep: 0, desc: 'Shoulder pads: structural, not optional.' },
@@ -130,265 +152,299 @@
   }
   const pick = (G, a) => a[Math.floor(rnd(G) * a.length)];
   const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+  const money = (n) => (n < 0 ? '-$' : '$') + Math.round(Math.abs(n)).toLocaleString('en-US');
 
   // ---------------------------------------------------------------- state
-  const eventWeeks = {};
-  ERA_EVENTS.forEach((e) => { const w = weekOf(...e.at); (eventWeeks[w] = eventWeeks[w] || []).push(e); });
-
   function newGame(seed) {
     const G = {
       v: SAVE_VERSION, rs: (seed == null ? (Math.random() * 2 ** 31) | 0 : seed) | 0,
-      week: 0, cash: START_CASH, holdings: {}, shorts: {}, stocks: {}, hist: {},
-      ytd: 0, taxDue: 0, heat: 0, fined: false, offer: null, insider: null, sec: null, lastOffer: -99, flags: {}, ach: {},
-      home: 0, car: 0, tech: 0, lux: [],
-      billMonth: monthIdx(0), mom: {}, smom: {}, next: null, tips: [],
-      news: [], nwHist: [START_CASH], over: null,
-      stats: { trades: 0, realized: 0, peak: START_CASH, peakWeek: 0, fees: 0 },
+      day: 0, cash: START_CASH, pos: null, mk: {}, today: null, sess: null, tips: [],
+      home: 0, car: 0, tech: 0, lux: [], billMonth: monthIdxOfDay(0),
+      ytd: 0, taxDue: 0, heat: 0, fined: false, sec: null, lastOffer: -99, flags: {}, ach: {},
+      unlocked: { SOY: true }, news: [], seq: 0, nwHist: [START_CASH], over: null, lastSession: null,
+      stats: { trades: 0, wins: 0, losses: 0, realized: 0, fees: 0, peak: START_CASH, peakDay: 0, sessions: 0, bestDay: 0, worstDay: 0, streak: 0 },
     };
-    for (const s of STOCKS) {
-      const active = !s.ipo;
-      G.stocks[s.t] = { price: s.p0, prev: s.p0, active, delisted: false, mom: null };
-      G.hist[s.t] = active ? [s.p0] : [];
-    }
-    G.next = computeNext(G, 1);
-    addNews(G, 'era', "January 1990. You've got $8,000, a landline, and a dream. Make it big on Wall Street.");
+    for (const c of CONTRACTS) G.mk[c.sym] = { close: Math.round(anchorPrice(c.sym, START_MS) / c.tick) };
+    prepareDay(G); makeTips(G);
+    addNews(G, 'era', 'January 1990. $8,000, a trading badge and a colored jacket. Welcome to the pit.');
     return G;
   }
-
   function addNews(G, tag, text) {
-    G.seq = (G.seq || 0) + 1;
-    G.news.unshift({ week: G.week, tag, text });
+    G.seq++;
+    G.news.unshift({ day: G.day, tag, text });
     if (G.news.length > 150) G.news.length = 150;
   }
 
-  // ---------------------------------------------------------------- market model
-  function computeNext(G, week) {
-    const year = dateOf(week).getUTCFullYear();
-    const [drift, vol] = ERA[year] || ERA[2000];
-    const news = [];
-    let mkt = drift / 52 + (vol / Math.sqrt(52)) * gauss(G);
-    const secShock = {};
-    for (const e of eventWeeks[week] || []) {
-      mkt += e.mkt;
-      for (const k in e.sec) secShock[k] = (secShock[k] || 0) + e.sec[k];
-      for (const k in e.mom || {}) {
-        if (k === 'mkt') G.mom.mkt = { n: e.mom[k][0], r: e.mom[k][1] };
-        else G.smom[k] = { n: e.mom[k][0], r: e.mom[k][1] };
+  // ---------------------------------------------------------------- daily macro model
+  function prepareDay(G) {
+    const day = G.day, d = dateOfDay(day), ms = d.getTime(), year = d.getUTCFullYear();
+    const prevMs = dateOfDay(Math.max(0, day - 1)).getTime();
+    const evs = eventsByDay[day] || [], per = {};
+    for (const c of CONTRACTS) {
+      const mk = G.mk[c.sym];
+      const sig = c.vol * (c.sym === 'SPX' ? Math.sqrt((ERA_VOL[year] || .2) / .15) : 1);
+      const dev = Math.log(mk.close * c.tick) - Math.log(anchorPrice(c.sym, prevMs));
+      const ret = Math.log(anchorPrice(c.sym, ms)) - Math.log(anchorPrice(c.sym, prevMs)) - 0.015 * dev + sig * gauss(G);
+      let shock = 0, text = null, scripted = false;
+      for (const e of evs) if (e.imp[c.sym]) { shock += e.imp[c.sym]; text = text || e.text; scripted = true; }
+      if (!scripted && rnd(G) < .07) {
+        const tpl = pick(G, NEWS_TEMPLATES[c.sym]);
+        shock = tpl[1] * tpl[2] * (0.6 + 0.8 * rnd(G)); text = tpl[0];
       }
-      news.push({ tag: 'era', text: e.text, major: true });
+      const total = ret + shock, gap = 0.35 * sig * gauss(G);
+      per[c.sym] = {
+        openT: Math.max(8, Math.round(mk.close * Math.exp(gap))), closeT: Math.max(8, Math.round(mk.close * Math.exp(total))),
+        sig, shock, text, scripted,
+      };
     }
-    if (G.mom.mkt) { mkt += G.mom.mkt.r; if (--G.mom.mkt.n <= 0) delete G.mom.mkt; }
-    const secMom = {};
-    for (const k in G.smom) { secMom[k] = G.smom[k].r; if (--G.smom[k].n <= 0) delete G.smom[k]; }
-
-    const rets = {};
-    for (const s of STOCKS) {
-      const st = G.stocks[s.t];
-      if (st.delisted) continue;
-      if (s.ipo && s.ipo > week) continue;
-      const tilt = TILT[s.sector];
-      const sectorDrift = (tilt[year] != null ? tilt[year] : tilt.def) / 52;
-      let r = s.beta * mkt + sectorDrift + (secShock[s.sector] || 0) + (secMom[s.sector] || 0)
-        + (s.vol * 0.75 / Math.sqrt(52)) * gauss(G);
-      if (st.mom) { r += st.mom.r; if (--st.mom.n <= 0) st.mom = null; }
-      if (s.ipo === week) r += .35 + rnd(G) * .4; // IPO pop
-      rets[s.t] = r;
-    }
-    // random company news (price move is baked into this week's return)
-    if (rnd(G) < .65) {
-      const cands = STOCKS.filter((s) => rets[s.t] != null && s.ipo !== week && s.sector !== 'idx');
-      if (cands.length) companyNews(G, pick(G, cands), rets, news);
-    }
-    for (const t in rets) rets[t] = clamp(rets[t], -.6, 1.5);
-    return { week, rets, news };
-  }
-
-  function companyNews(G, s, rets, news) {
-    const bio = s.sector === 'bio';
-    const kinds = [
-      ['beats earnings estimates — shares jump!', [.07, .17], .012, 3, 1],
-      ['misses earnings badly — shares slide.', [-.2, -.08], -.01, 3, 1],
-      ['gets an analyst upgrade to "strong buy".', [.04, .09], .006, 2, 1],
-      ['hit with a class-action lawsuit.', [-.14, -.06], -.006, 2, 1],
-      ['unveils a hot new product line.', [.06, .14], .008, 3, 1],
-      ['CEO caught in a scandal. Board scrambles.', [-.25, -.12], -.012, 3, .5],
-      ['receives a surprise takeover bid!', [.25, .45], .0, 0, .35],
-      ['accounting irregularities uncovered. SEC investigating.', [-.45, -.25], -.02, 4, .3],
-    ];
-    if (bio) kinds.push(['wins FDA approval for its blockbuster drug!', [.3, .6], .01, 3, .8], ['FDA rejects its key drug application.', [-.5, -.3], -.015, 3, .8]);
-    const total = kinds.reduce((a, k) => a + k[4], 0);
-    let x = rnd(G) * total, k = kinds[0];
-    for (const kk of kinds) { x -= kk[4]; if (x <= 0) { k = kk; break; } }
-    const mv = k[1][0] + rnd(G) * (k[1][1] - k[1][0]);
-    rets[s.t] += mv;
-    if (k[2]) G.stocks[s.t].mom = { n: k[3], r: k[2] };
-    news.push({ tag: 'co', text: `${s.name} (${s.t}) ${k[0]}`, t: s.t, major: Math.abs(mv) > .3 });
-  }
-
-  // ---------------------------------------------------------------- advance
-  function advanceWeek(G) {
-    const events = [];
-    if (G.over) return { events, over: G.over };
-    if (G.offer) G.offer = null; // unanswered insider offers expire
-    const nx = G.next;
-    G.week = nx.week;
-    const date = dateOf(G.week);
-    for (const n of nx.news) { addNews(G, n.tag, n.text); if (n.major) events.push({ kind: 'news', text: n.text }); }
-
-    for (const s of STOCKS) {
-      const st = G.stocks[s.t];
-      if (st.delisted) continue;
-      if (s.ipo && s.ipo === G.week) {
-        st.active = true; st.prev = s.p0;
-        addNews(G, 'co', `${s.name} (${s.t}) begins trading at $${s.p0.toFixed(2)}.`);
-        events.push({ kind: 'news', text: `NEW IPO: ${s.name} (${s.t}) opens at $${s.p0.toFixed(2)}!` });
-      }
-      if (!st.active) continue;
-      st.prev = st.price;
-      st.price = Math.max(.01, st.price * (1 + (nx.rets[s.t] || 0)));
-      if (st.price < .4) { delist(G, s, events); continue; }
-      if (st.price > 200) split(G, s, events);
-      const h = G.hist[s.t]; h.push(st.price); if (h.length > HIST_LEN) h.shift();
-    }
-
-    resolveInsider(G, events);
-    checkMargin(G, events);
-
-    if (!G.over && monthIdx(G.week) !== G.billMonth) {
-      G.billMonth = monthIdx(G.week);
-      payBills(G, events);
-    }
-    if (!G.over) checkSec(G, events);
-
-    if (!G.over) {
-      const nw = netWorth(G);
-      G.nwHist.push(nw); if (G.nwHist.length > 600) G.nwHist.shift();
-      if (nw > G.stats.peak) { G.stats.peak = nw; G.stats.peakWeek = G.week; }
-      if (nw < 500) G.flags.low = true;
-      if (date.getTime() + WEEK_MS > END_MS) {
-        G.over = 'end';
-        events.push({ kind: 'end', text: 'The decade is over.' });
-      }
-    }
-    for (const a of checkAchievements(G)) events.push({ kind: 'ach', text: a.name, ach: a });
-    if (!G.over) { G.next = computeNext(G, G.week + 1); makeTips(G); maybeOffer(G, events); }
-    return { events, over: G.over };
-  }
-
-  function delist(G, s, events) {
-    const st = G.stocks[s.t];
-    st.delisted = true; st.active = false;
-    let msg = `${s.name} (${s.t}) files for CHAPTER 11 and is delisted.`;
-    const h = G.holdings[s.t], sh = G.shorts[s.t];
-    if (h) {
-      const loss = h.cost * h.shares; realize(G, -loss);
-      if (loss >= 10000) G.flags.bust = true;
-      msg += ` Your ${h.shares} shares are worthless!`; delete G.holdings[s.t];
-    }
-    if (sh) {
-      const gain = sh.entry * sh.shares; realize(G, gain); G.flags.shortWin = true;
-      msg += ` Your short position pays out ${money(gain)}!`; delete G.shorts[s.t];
-    }
-    addNews(G, 'co', msg); events.push({ kind: 'bust', text: msg });
-  }
-
-  function split(G, s, events) {
-    const st = G.stocks[s.t];
-    st.price /= 2; st.prev /= 2;
-    G.hist[s.t] = G.hist[s.t].map((p) => p / 2);
-    const h = G.holdings[s.t]; if (h) { h.shares *= 2; h.cost /= 2; }
-    const sh = G.shorts[s.t]; if (sh) { sh.shares *= 2; sh.entry /= 2; }
-    const msg = `${s.name} (${s.t}) announces a 2-for-1 stock split.`;
-    addNews(G, 'co', msg); events.push({ kind: 'news', text: msg });
+    G.today = { day, per };
   }
 
   function makeTips(G) {
     G.tips = [];
     const tier = TECH[G.tech];
-    if (!tier.tips) return;
-    const cands = STOCKS.filter((s) => G.next.rets[s.t] != null && G.stocks[s.t].active && s.sector !== 'idx');
+    const syms = CONTRACTS.filter((c) => G.unlocked[c.sym]).map((c) => c.sym);
     const used = new Set();
-    const sources = ['Your barber', 'A guy at the bar', 'Your broker', 'The Quotron', 'A Goldman insider', 'Your analyst'];
-    for (let i = 0; i < tier.tips && cands.length; i++) {
-      const s = pick(G, cands);
-      if (used.has(s.t)) continue; used.add(s.t);
-      const truth = G.next.rets[s.t] >= 0;
-      const up = rnd(G) < tier.acc ? truth : !truth;
-      const src = sources[Math.min(G.tech + Math.floor(rnd(G) * 2), sources.length - 1)];
-      G.tips.push({ t: s.t, up, text: `${src} says ${s.name} (${s.t}) is going to ${up ? 'POP 📈' : 'TANK 📉'}.` });
+    for (let i = 0; i < tier.tips && syms.length; i++) {
+      const sym = pick(G, syms); if (used.has(sym)) continue; used.add(sym);
+      const per = G.today.per[sym], truth = per.closeT >= per.openT;
+      const up = rnd(G) < tier.rel ? truth : !truth;
+      G.tips.push({ sym, up, text: `Your guy on the floor says ${CBY[sym].name} ${up ? 'closes HIGHER 📈' : 'closes LOWER 📉'} today.` });
     }
-    for (const tp of G.tips) addNews(G, 'tip', tp.text);
   }
 
-  // ---------------------------------------------------------------- insider trading
-  function maybeOffer(G, events) {
-    if (G.offer || G.insider || G.sec) return;
-    if (G.week < 20 || G.week - G.lastOffer < 26 || netWorth(G) < 15000 || rnd(G) > .035) return;
-    const cands = STOCKS.filter((s) => G.next.rets[s.t] != null && G.stocks[s.t].active && s.sector !== 'idx');
-    const s = pick(G, cands), up = rnd(G) < .55;
-    G.lastOffer = G.week;
-    const text = `Your old roommate, now at an investment bank, calls late at night: "${s.name} (${s.t}) is about to ${up ? 'announce a takeover' : 'restate its earnings'}. Next week it's going to ${up ? 'soar' : 'collapse'}. You didn't hear it from me."`;
-    G.offer = { t: s.t, up, mv: up ? .3 + rnd(G) * .25 : -(.3 + rnd(G) * .2), text };
-    events.push({ kind: 'offer', text });
-  }
-  function acceptOffer(G) {
-    const o = G.offer; if (!o) return { ok: false, msg: 'No offer.' };
-    const s = STOCKS.find((x) => x.t === o.t);
-    G.next.rets[o.t] = clamp(G.next.rets[o.t] + o.mv, -.6, 1.5);
-    G.next.news.push({ tag: 'co', major: true, t: o.t, text: o.up
-      ? `${s.name} (${s.t}) announces SURPRISE ACQUISITION — shares soar!`
-      : `${s.name} (${s.t}) restates earnings; fraud probe launched — shares collapse!` });
-    G.tips = G.tips.filter((x) => x.t !== o.t);
-    G.insider = { t: o.t, up: o.up, week: G.next.week };
-    G.heat++; G.offer = null;
-    return { ok: true, msg: `Insider tip taken. Position in ${o.t} now, before the news breaks.` };
-  }
-  function declineOffer(G) { G.offer = null; return { ok: true, msg: 'You walked away. Clean hands.' }; }
+  // ---------------------------------------------------------------- trading session
+  const JUMP_W = [.30, .22, .16, .12, .08, .06, .04, .02];
+  const bidT = (S, t) => Math.floor(S.path[t]);
 
-  function resolveInsider(G, events) {
-    const ins = G.insider;
-    if (!ins || ins.week !== G.week) return;
-    G.insider = null;
-    const st = G.stocks[ins.t], d = st.price - st.prev;
-    const h = G.holdings[ins.t], sh = G.shorts[ins.t];
-    const gain = ins.up ? (h ? h.shares * d : 0) : (sh ? sh.shares * -d : 0);
+  function startSession(G, sym) {
+    const c = CBY[sym];
+    if (G.over || G.sess) return { ok: false, msg: 'Not available.' };
+    if (!c || !G.unlocked[sym]) return { ok: false, msg: 'That pit is locked.' };
+    if (G.pos && G.pos.sym !== sym) return { ok: false, msg: `You're holding ${G.pos.sym}. Trade that pit to close it out.` };
+    const N = N_STEPS, per = G.today.per[sym], open = per.openT, close = per.closeT;
+    const sigStep = open * per.sig * 0.9 / Math.sqrt(N);
+
+    const flow = new Array(N).fill(0);
+    for (let t = Math.floor(rnd(G) * 25); t < N;) {
+      const len = 20 + Math.floor(rnd(G) * 60), r = rnd(G), f = r < .18 ? 0 : (r < .59 ? 1 : -1), s = .4 + .6 * rnd(G);
+      for (let i = t; i < Math.min(N, t + len); i++) flow[i] = f * s;
+      t += len + 5 + Math.floor(rnd(G) * 20);
+    }
+    const jump = new Array(N + 1).fill(0), events = [];
+    if (per.text) {
+      const tEv = 60 + Math.floor(rnd(G) * 320), J = open * (Math.exp(per.shock) - 1);
+      JUMP_W.forEach((w, k) => { jump[tEv + 1 + k] += J * w; });
+      events.push({ t: tEv, text: per.text, jump: J, scripted: per.scripted });
+    }
+    const path = [open]; let m = open;
+    for (let i = 0; i < N; i++) { m += flow[i] * K_FLOW * sigStep + sigStep * 0.97 * gauss(G) + jump[i + 1]; path.push(m); }
+    const resid = close - path[N];
+    for (let i = 0; i <= N; i++) path[i] += resid * i / N;
+
+    const rel = TECH[G.tech].rel, shouts = [];
+    for (let i = 0; i < N; i++) {
+      if (rnd(G) >= .2) continue;
+      const f = Math.sign(flow[i]);
+      const side = f !== 0 && rnd(G) < rel ? f : (rnd(G) < .5 ? 1 : -1);
+      shouts.push([i, side, pick(G, [5, 10, 10, 20, 25, 50, 100])]);
+    }
+
+    let offer = null;
+    if (netWorth(G) >= 15000 && !G.sec && G.day - G.lastOffer >= 15 && rnd(G) < .10) {
+      const side = rnd(G) < .5 ? 1 : -1, t0 = 100 + Math.floor(rnd(G) * 250), lots = pick(G, [100, 150, 200, 300]);
+      const J = Math.round(side * (0.35 + 0.25 * rnd(G)) * open * per.sig * 1.5), jt = t0 + 30;
+      let cum = 0;
+      for (let i = 0; i <= N; i++) { const k = i - (jt + 1); if (k >= 0 && k < JUMP_W.length) cum += J * JUMP_W[k]; path[i] += cum; }
+      offer = { t: t0, side, lots, J, jt, bonus: lots * 2.5, resolved: null };
+      G.lastOffer = G.day;
+    }
+    G.sess = { sym, n: N, t: 0, path, shouts, events, offer, stop: 0, done: false, startEq: 0, wins: 0, trades: 0, scripted: !!per.scripted && !!per.text, aheadEntry: null };
+    G.sess.startEq = equity(G);
+    G.stats.sessions++;
+    if (sym === 'SPX') G.flags.spx = true;
+    if (sym === 'BOND') G.flags.bond = true;
+    return { ok: true };
+  }
+
+  const markT = (G) => (!G.pos ? 0 : (G.sess && G.sess.sym === G.pos.sym ? G.sess.path[G.sess.t] : G.mk[G.pos.sym].close));
+  function unreal(G) { return G.pos ? (markT(G) - G.pos.entry) * G.pos.qty * CBY[G.pos.sym].tickVal : 0; }
+  const equity = (G) => G.cash + unreal(G);
+  const maxLots = (G, sym) => Math.max(0, Math.floor(equity(G) / CBY[sym].margin + 1e-9));
+
+  function trade(G, side, qty, forced) {
+    const S = G.sess;
+    if (!S || S.done || G.over) return { ok: false, msg: 'The pit is closed.' };
+    qty = Math.floor(qty);
+    if (qty < 1) return { ok: false, msg: 'Invalid size.' };
+    const c = CBY[S.sym], t = S.t, cur = G.pos ? G.pos.qty : 0, next = cur + side * qty;
+    const increasing = Math.abs(next) > Math.abs(cur);
+    if (!forced && increasing && Math.abs(next) > maxLots(G, S.sym)) {
+      return { ok: false, msg: `Margin: ${S.sym} needs ${money(c.margin)}/lot — you can hold ${maxLots(G, S.sym)}.` };
+    }
+    const slip = Math.floor((qty - 1) / c.depth) + (forced ? 1 : 0);
+    const px = side > 0 ? bidT(S, t) + 1 + slip : bidT(S, t) - slip;
+    const fee = qty * TECH[G.tech].fee;
+    let realized = 0, closeQ = 0;
+    if (cur !== 0 && Math.sign(cur) !== side) {
+      closeQ = Math.min(Math.abs(cur), qty);
+      realized = (px - G.pos.entry) * Math.sign(cur) * closeQ * c.tickVal;
+    }
+    if (cur === 0 || Math.sign(cur) === side) {
+      G.pos = { sym: S.sym, qty: next, entry: (cur === 0 ? px : (G.pos.entry * Math.abs(cur) + px * qty) / (Math.abs(cur) + qty)) };
+    } else if (next === 0) G.pos = null;
+    else if (Math.sign(next) === Math.sign(cur)) G.pos.qty = next;       // partial close
+    else G.pos = { sym: S.sym, qty: next, entry: px };                    // flipped
+    G.cash += realized - fee; G.ytd += realized - fee;
+    G.stats.realized += realized - fee; G.stats.fees += fee; G.stats.trades++; S.trades++;
+    if (closeQ > 0) {
+      const net = realized - fee * closeQ / qty;
+      if (net > 0) { G.stats.wins++; S.wins++; } else G.stats.losses++;
+      if (S.wins >= 10) G.flags.scalper = true;
+    }
+    const o = S.offer;
+    if (o && o.resolved === 'ahead' && !forced && side === o.side && t >= o.t && t <= o.jt && increasing && !S.aheadEntry) S.aheadEntry = { px, qty };
+    return { ok: true, px, realized, fee, msg: `${side > 0 ? 'Bought' : 'Sold'} ${qty} ${S.sym} @ ${fmtPrice(S.sym, px)}` };
+  }
+  function flatten(G, forced) { return G.pos && G.sess ? trade(G, -Math.sign(G.pos.qty), Math.abs(G.pos.qty), forced) : { ok: false, msg: 'Already flat.' }; }
+  function setStop(G, ticks) { if (G.sess) G.sess.stop = ticks; }
+  function respondOffer(G, choice) {
+    const S = G.sess, o = S && S.offer;
+    if (!o || o.resolved) return { ok: false, msg: 'No order.' };
+    o.resolved = choice;
+    if (choice === 'honest') { G.cash += o.bonus; G.ytd += o.bonus; return { ok: true, msg: `You filled the customer fairly and earned ${money(o.bonus)} in brokerage.` }; }
+    G.heat++;
+    return { ok: true, msg: 'You\'re trading ahead of the customer. Be quick — and pray nobody\'s watching.' };
+  }
+  // pit sentiment: net signed size of shouts in the last `w` steps
+  function recentFlow(G, w) {
+    const S = G.sess; if (!S) return 0; let sum = 0;
+    for (let i = S.shouts.length - 1; i >= 0; i--) { const s = S.shouts[i]; if (s[0] > S.t) continue; if (s[0] <= S.t - w) break; sum += s[1] * s[2]; }
+    return sum;
+  }
+  const shoutsNow = (G, n) => { const S = G.sess, out = []; if (!S) return out; for (let i = S.shouts.length - 1; i >= 0 && out.length < n; i--) if (S.shouts[i][0] <= S.t) out.push(S.shouts[i]); return out; };
+
+  function stepSession(G) {
+    const S = G.sess, events = [];
+    if (!S || S.done) return events;
+    if (S.offer && !S.offer.resolved && S.t >= S.offer.t) S.offer.resolved = 'ignored';
+    S.t++;
+    const t = S.t, c = CBY[S.sym];
+    for (const ev of S.events) if (ev.t === t) { addNews(G, 'mkt', ev.text); events.push({ kind: 'headline', text: ev.text, jump: ev.jump, scripted: ev.scripted }); }
+    const o = S.offer;
+    if (o && !o.resolved && o.t === t) events.push({ kind: 'offer', text: `Your broker flashes you a ${o.lots}-lot ${o.side > 0 ? 'BUY' : 'SELL'} order in ${c.name} — a big customer. It'll move the market in a few seconds. Fill it fairly for ${money(o.bonus)} brokerage… or trade ahead of it first?` });
+    if (o && o.resolved === 'ahead' && t === o.jt + 8) settleFrontRun(G, events);
+    if (G.pos) {
+      if (equity(G) < MAINT * c.margin * Math.abs(G.pos.qty)) {
+        flatten(G, true); G.flags.margin = true;
+        const text = 'MARGIN CALL! Your clearing firm liquidated your position.';
+        addNews(G, 'life', text); events.push({ kind: 'margin', text });
+      } else if (S.stop > 0 && (G.pos.entry - S.path[t]) * Math.sign(G.pos.qty) >= S.stop) {
+        flatten(G, true); G.flags.stop = true;
+        events.push({ kind: 'stop', text: 'Stop-loss hit — position closed.' });
+      }
+    }
+    if (t >= S.n) finishSession(G, events);
+    return events;
+  }
+
+  function settleFrontRun(G, events) {
+    const S = G.sess, o = S.offer, a = S.aheadEntry;
+    if (!a) { events.push({ kind: 'insider', text: 'You hesitated and didn\'t trade ahead. The customer order hit the market without you.' }); return; }
+    const gain = (S.path[S.t] - a.px) * o.side * a.qty * CBY[S.sym].tickVal;
     if (gain > 0) {
-      G.flags.insiderWin = true;
+      G.flags.frontWin = true;
       const p = .25 + .2 * (G.heat - 1);
-      if (rnd(G) < p) G.sec = { at: G.week + 3 + Math.floor(rnd(G) * 6), profit: gain, warned: false };
-      const text = `Your insider trade in ${ins.t} paid off: +${money(gain)}. Hope nobody noticed…`;
+      if (rnd(G) < p) G.sec = { at: G.day + 10 + Math.floor(rnd(G) * 20), profit: gain, warned: false };
+      const text = `Front-running paid off: ~${money(gain)} on the customer's order. Hope the exchange compliance guys weren't watching…`;
       addNews(G, 'life', text); events.push({ kind: 'insider', text });
-    } else {
-      const text = `You didn't act on the ${ins.t} tip. The stock ${ins.up ? 'soared' : 'collapsed'} without you.`;
-      addNews(G, 'life', text); events.push({ kind: 'insider', text });
-    }
+    } else events.push({ kind: 'insider', text: 'You traded ahead… but it didn\'t pay. You took the risk and none of the reward.' });
   }
-  function checkSec(G, events) {
-    const sec = G.sec; if (!sec) return;
-    if (G.week === sec.at - 1 && !sec.warned) {
-      sec.warned = true;
-      const text = 'Unmarked sedans are parked outside your building. Your phone clicks when you pick it up.';
-      addNews(G, 'life', text); events.push({ kind: 'warn', text });
+
+  function finishSession(G, events) {
+    const S = G.sess; S.done = true;
+    const sym = S.sym, closeT = Math.round(S.path[S.n]);
+    const closes = {}; closes[sym] = closeT;
+    endOfDay(G, events, closes, S);
+  }
+
+  // ---------------------------------------------------------------- end of day: settlement, margin, bills, tax
+  function endOfDay(G, events, closes, S) {
+    const date = dateOfDay(G.day);
+    for (const e of eventsByDay[G.day] || []) addNews(G, 'era', e.text);
+    // daily settlement of variation margin
+    const cashBefore = G.cash;
+    for (const c of CONTRACTS) {
+      const closeT = closes && closes[c.sym] != null ? closes[c.sym] : G.today.per[c.sym].closeT;
+      if (G.pos && G.pos.sym === c.sym) {
+        const v = (closeT - G.pos.entry) * G.pos.qty * c.tickVal;
+        G.cash += v; G.ytd += v; G.stats.realized += v; G.pos.entry = closeT;
+        if (v < -5000) G.flags.gap = true;
+      }
+      G.mk[c.sym].close = closeT;
     }
-    if (G.week < sec.at) return;
-    G.sec = null;
-    if (G.fined) {
-      G.over = 'prison';
-      const text = 'FBI agents arrive with a warrant. Second offense. You are going to federal prison.';
-      addNews(G, 'life', text); events.push({ kind: 'prison', text }); return;
+    // session summary
+    if (S) {
+      const pnl = G.cash - S.startEq;
+      G.lastSession = { sym: S.sym, pnl, trades: S.trades, wins: S.wins, fees: 0, overnight: !!G.pos, date: date.getTime() };
+      const st = G.stats;
+      st.bestDay = Math.max(st.bestDay, pnl); st.worstDay = Math.min(st.worstDay, pnl);
+      st.streak = pnl > 0 ? st.streak + 1 : 0;
+      if (pnl >= 10000) G.flags.bigDay = true;
+      if (st.streak >= 5) G.flags.streak5 = true;
+      if (S.scripted && pnl >= 2000) G.flags.headline = true;
+      events.push({ kind: 'close', summary: G.lastSession });
     }
-    G.fined = true; G.flags.fined = true;
-    const fine = Math.max(10000, sec.profit * 3), msgs = [];
-    const ok = liquidateFor(G, () => fine, msgs);
-    if (ok) {
-      G.cash -= fine;
-      const text = `SEC SETTLEMENT: insider trading. You disgorge your profits and pay a ${money(fine)} fine.${msgs.length ? ' ' + msgs.join('. ') + '.' : ''} One more strike and it's prison.`;
-      addNews(G, 'life', text); events.push({ kind: 'sec', text });
-    } else {
-      G.over = 'homeless';
-      const text = `SEC fines you ${money(fine)}. You can't pay, and everything is seized. You're on the street.`;
-      addNews(G, 'life', text); events.push({ kind: 'homeless', text });
+    // margin call at settlement (e.g. you held through a gap)
+    if (G.pos) {
+      const c = CBY[G.pos.sym];
+      if (G.cash < MAINT * c.margin * Math.abs(G.pos.qty)) {
+        G.cash -= Math.abs(G.pos.qty) * TECH[G.tech].fee; G.pos = null; G.flags.margin = true;
+        const text = 'MARGIN CALL at settlement! Your clearing firm liquidated your overnight position.';
+        addNews(G, 'life', text); events.push({ kind: 'margin', text });
+      }
     }
+    if (G.cash < 0) { // blew through the account: clearing firm wants the money NOW
+      const msgs = [];
+      if (liquidateFor(G, () => 0, msgs)) { const text = `Account deficit! The clearing firm seized assets. ${msgs.join('. ')}.`; addNews(G, 'life', text); events.push({ kind: 'repo', text }); }
+      else return goHomeless(G, events, 'Your account is wiped out and you owe the clearing firm. They take everything.');
+    }
+    G.sess = null;
+    G.day++;
+    if (dateOfDay(G.day).getTime() >= END_MS) { G.over = 'end'; events.push({ kind: 'end', text: 'The decade is over.' }); }
+    if (!G.over && monthIdxOfDay(G.day) !== G.billMonth) { G.billMonth = monthIdxOfDay(G.day); payBills(G, events); }
+    if (!G.over) checkSec(G, events);
+    if (!G.over) {
+      const nw = netWorth(G);
+      G.nwHist.push(nw); if (G.nwHist.length > 800) G.nwHist.shift();
+      if (nw > G.stats.peak) { G.stats.peak = nw; G.stats.peakDay = G.day; }
+      if (nw < 500) G.flags.low = true;
+      for (const c of CONTRACTS) if (!G.unlocked[c.sym] && nw >= c.unlock) {
+        G.unlocked[c.sym] = true;
+        const text = `NEW PIT UNLOCKED: ${c.pit} — ${c.name}! Bigger moves, bigger margin.`;
+        addNews(G, 'life', text); events.push({ kind: 'unlock', text });
+      }
+    }
+    for (const a of checkAchievements(G)) events.push({ kind: 'ach', text: a.name, ach: a });
+    if (!G.over) { prepareDay(G); makeTips(G); }
+    return events;
+  }
+
+  function skipDays(G, n) {
+    const events = [];
+    const STOP = ['repo', 'homeless', 'margin', 'sec', 'warn', 'prison', 'end', 'unlock'];
+    for (let i = 0; i < n && !G.over && !G.sess; i++) {
+      endOfDay(G, events, null, null);
+      if (events.some((e) => STOP.includes(e.kind))) break;
+    }
+    return events;
+  }
+
+  function goHomeless(G, events, text) {
+    G.cash = Math.max(0, G.cash); G.pos = null; G.over = 'homeless'; G.sess = null;
+    addNews(G, 'life', text); events.push({ kind: 'homeless', text });
+    for (const a of checkAchievements(G)) events.push({ kind: 'ach', text: a.name, ach: a });
+    return events;
   }
 
   // ---------------------------------------------------------------- money
@@ -398,39 +454,16 @@
     return HOMES[G.home].rent + livingCost(G) + CARS[G.car].upkeep + TECH[G.tech].upkeep + lux;
   }
   const monthlyIncome = (G) => (G.home <= 1 ? 400 : 0); // diner job — you quit once you move up
-  const stockValue = (G) => { let v = 0; for (const t in G.holdings) v += G.holdings[t].shares * G.stocks[t].price; return v; };
-  const shortValue = (G) => { let v = 0; for (const t in G.shorts) v += G.shorts[t].shares * G.stocks[t].price; return v; };
   const assetValue = (G) => SELL_RATIO * (CARS[G.car].price + TECH[G.tech].price + G.lux.reduce((a, id) => a + LUX.find((l) => l.id === id).price, 0));
-  const netWorth = (G) => G.cash + stockValue(G) - shortValue(G) + assetValue(G);
-  const gross = (G) => stockValue(G) + shortValue(G);
-  const equity = (G) => G.cash + stockValue(G) - shortValue(G);
-  const marginDebt = (G) => Math.max(0, -G.cash);
-  const commission = (G) => TECH[G.tech].comm;
-  const marginLevel = (G) => { const g = gross(G); return g > 0 ? equity(G) / g : Infinity; };
-  const money = (n) => '$' + Math.round(n).toLocaleString('en-US');
+  const netWorth = (G) => equity(G) + assetValue(G);
+  const marginUsed = (G) => (G.pos ? Math.abs(G.pos.qty) * CBY[G.pos.sym].margin : 0);
+  const marginLevel = (G) => { const u = marginUsed(G); return u > 0 ? equity(G) / u : Infinity; };
 
-  function realize(G, amt) { G.ytd += amt; G.stats.realized += amt; }
-
-  // sell just enough shares (largest position first) to bring cash up to `target`; no commission when forced
-  function raiseCash(G, target) {
-    let sold = false;
-    const order = Object.keys(G.holdings).sort((x, y) => G.holdings[y].shares * G.stocks[y].price - G.holdings[x].shares * G.stocks[x].price);
-    for (const t of order) {
-      if (G.cash >= target) break;
-      const h = G.holdings[t], px = G.stocks[t].price;
-      sell(G, t, Math.min(h.shares, Math.ceil((target - G.cash) / px)), true); sold = true;
-    }
-    return sold;
-  }
-
-  // Free up cash to cover needFn() by liquidating stocks, then luxuries, car, gear, home. Returns false if impossible.
+  // Free up cash by selling luxuries, car, gear, then downgrading home. Returns false if impossible.
   function liquidateFor(G, needFn, msgs) {
     let guard = 40;
     while (G.cash < needFn() && guard--) {
-      const need = needFn(), g = gross(G);
-      if (g > 0 && equity(G) - need >= 0.35 * g) return true; // can float it on margin safely
-      if (Object.keys(G.holdings).length) { raiseCash(G, need); if (!msgs.includes('Broker sold stock')) msgs.push('Broker sold stock'); }
-      else if (G.lux.length) {
+      if (G.lux.length) {
         const id = G.lux.slice().sort((a, b) => LUX.find((l) => l.id === b).price - LUX.find((l) => l.id === a).price)[0];
         sellItem(G, 'lux', id, true); msgs.push(`Repo: ${LUX.find((l) => l.id === id).name} sold`);
       } else if (G.car > 0) { G.cash += SELL_RATIO * CARS[G.car].price; msgs.push(`Repo: ${CARS[G.car].name} sold`); G.car = 0; }
@@ -442,114 +475,50 @@
   }
 
   function payBills(G, events) {
-    const month = dateOf(G.week).getUTCMonth();
-    if (month === 0) { // new tax year: settle last year's gains
+    const month = dateOfDay(G.day).getUTCMonth();
+    if (month === 0) { // new tax year
       const net = G.ytd;
       G.taxDue = Math.max(0, net) * TAX_RATE; G.ytd = Math.min(0, net);
-      if (G.taxDue > 0) addNews(G, 'life', `Tax time: ${money(net)} in capital gains last year. The IRS wants ${money(G.taxDue)} by April.`);
+      if (G.taxDue > 0) addNews(G, 'life', `Tax time: ${money(net)} in trading gains last year. The IRS wants ${money(G.taxDue)} by April.`);
     }
-    const interest = (G.cash < 0 ? -G.cash * MARGIN_RATE / 12 : 0) + shortValue(G) * .01 / 12;
     const tax = month === 3 ? G.taxDue : 0;
-    const needFn = () => monthlyCosts(G) - monthlyIncome(G) + interest + tax;
+    const needFn = () => monthlyCosts(G) - monthlyIncome(G) + tax;
     const costs = monthlyCosts(G), income = monthlyIncome(G), msgs = [];
-    const ok = liquidateFor(G, needFn, msgs);
-    if (!ok) {
-      G.cash = Math.max(0, G.cash);
-      G.over = 'homeless';
-      const text = "You can't make rent. Everything is gone. You're out on the street.";
-      addNews(G, 'life', text); events.push({ kind: 'homeless', text }); return;
-    }
+    if (!liquidateFor(G, needFn, msgs)) return goHomeless(G, events, "You can't make rent. Everything is gone. You're out on the street.");
     G.cash -= needFn();
     if (tax > 0) { G.taxDue = 0; G.flags.taxPaid = (G.flags.taxPaid || 0) + tax; addNews(G, 'life', `You paid the IRS ${money(tax)}.`); }
-    if (msgs.length) {
-      const text = 'Bills overdue! ' + msgs.join('. ') + '.';
-      addNews(G, 'life', text); events.push({ kind: 'repo', text });
-    } else {
-      addNews(G, 'life', `Monthly bills paid: ${money(costs)}${income ? ` (diner paycheck +$${income})` : ''}${interest >= 1 ? `, margin/short interest ${money(interest)}` : ''}.`);
+    if (msgs.length) { const text = 'Bills overdue! ' + msgs.join('. ') + '.'; addNews(G, 'life', text); events.push({ kind: 'repo', text }); }
+    else addNews(G, 'life', `Monthly bills paid: ${money(costs)}${income ? ` (diner paycheck +$${income})` : ''}.`);
+  }
+
+  function checkSec(G, events) {
+    const sec = G.sec; if (!sec) return;
+    if (G.day === sec.at - 1 && !sec.warned) {
+      sec.warned = true;
+      const text = 'Men in cheap suits are asking the clerks about your trades. Compliance wants a word.';
+      addNews(G, 'life', text); events.push({ kind: 'warn', text });
     }
-  }
-
-  // margin call: if equity falls below maintenance, the broker force-closes positions (largest first)
-  function checkMargin(G, events) {
-    if (gross(G) <= 0 || equity(G) >= MAINT * gross(G)) return;
-    const closed = [];
-    let guard = 40;
-    while (gross(G) > 0 && equity(G) < MAINT * gross(G) * 1.2 && guard--) {
-      const all = [];
-      for (const t in G.holdings) all.push([t, 'L', G.holdings[t].shares * G.stocks[t].price]);
-      for (const t in G.shorts) all.push([t, 'S', G.shorts[t].shares * G.stocks[t].price]);
-      all.sort((a, b) => b[2] - a[2]);
-      const [t, kind] = all[0];
-      if (kind === 'L') sell(G, t, G.holdings[t].shares, true); else cover(G, t, G.shorts[t].shares, true);
-      closed.push(`${kind === 'L' ? 'sold' : 'covered'} ${t}`);
+    if (G.day < sec.at) return;
+    G.sec = null;
+    if (G.fined) {
+      G.over = 'prison';
+      const text = 'The FBI arrives with a warrant. Second offense. You are going to federal prison.';
+      addNews(G, 'life', text); events.push({ kind: 'prison', text });
+      for (const a of checkAchievements(G)) events.push({ kind: 'ach', text: a.name, ach: a });
+      return;
     }
-    G.flags.margin = true;
-    const text = `MARGIN CALL! Your account fell below maintenance. The broker force-liquidated your positions (${closed.join(', ')}).`;
-    addNews(G, 'life', text); events.push({ kind: 'margin', text });
-  }
-
-  // ---------------------------------------------------------------- trading
-  // Reg-T style: gross exposure (longs + shorts) may not exceed 2x equity. Cash < 0 means margin debt.
-  function maxOpen(G, t) {
-    const st = G.stocks[t];
-    if (G.over || !st.active) return 0;
-    const q = (2 * (equity(G) - commission(G)) - gross(G)) / st.price;
-    return Math.max(0, Math.floor(q + 1e-9));
-  }
-  const maxBuy = (G, t) => (G.shorts[t] ? 0 : maxOpen(G, t));
-  const maxShort = (G, t) => (G.holdings[t] ? 0 : maxOpen(G, t));
-
-  function buy(G, t, qty) {
-    const st = G.stocks[t]; qty = Math.floor(qty);
-    if (G.over || !st.active || qty < 1) return { ok: false, msg: 'Invalid order.' };
-    if (G.shorts[t]) return { ok: false, msg: `You're short ${t}. Cover first.` };
-    if (qty > maxOpen(G, t)) return { ok: false, msg: 'Not enough buying power (margin limit 2x equity).' };
-    const c = commission(G);
-    G.cash -= qty * st.price + c; G.stats.fees += c; G.stats.trades++;
-    const h = G.holdings[t] || (G.holdings[t] = { shares: 0, cost: 0 });
-    h.cost = (h.cost * h.shares + qty * st.price) / (h.shares + qty);
-    h.shares += qty;
-    return { ok: true, msg: `Bought ${qty} ${t} @ $${st.price.toFixed(2)}${G.cash < 0 ? ' (on margin)' : ''}` };
-  }
-  function sell(G, t, qty, quiet) {
-    const st = G.stocks[t], h = G.holdings[t]; qty = Math.floor(qty);
-    if (!h || qty < 1 || qty > h.shares) return { ok: false, msg: "You don't own that many shares." };
-    const c = quiet ? 0 : commission(G);
-    if (!quiet && G.cash + qty * st.price - c < 0 && qty * st.price - c < 0) return { ok: false, msg: 'Sale too small to cover the $' + c + ' commission.' };
-    G.cash += qty * st.price - c; G.stats.fees += c; G.stats.trades++;
-    realize(G, (st.price - h.cost) * qty - c);
-    if (st.price / h.cost >= 5) G.flags.tenx = true;
-    h.shares -= qty;
-    if (h.shares === 0) delete G.holdings[t];
-    return { ok: true, msg: `Sold ${qty} ${t} @ $${st.price.toFixed(2)}` };
-  }
-  function short(G, t, qty) {
-    const st = G.stocks[t]; qty = Math.floor(qty);
-    if (G.over || !st.active || qty < 1) return { ok: false, msg: 'Invalid order.' };
-    if (G.holdings[t]) return { ok: false, msg: `You own ${t}. Sell your shares first.` };
-    if (qty > maxOpen(G, t)) return { ok: false, msg: 'Not enough margin to short that much (limit 2x equity).' };
-    const c = commission(G);
-    G.cash += qty * st.price - c; G.stats.fees += c; G.stats.trades++;
-    const sh = G.shorts[t] || (G.shorts[t] = { shares: 0, entry: 0 });
-    sh.entry = (sh.entry * sh.shares + qty * st.price) / (sh.shares + qty);
-    sh.shares += qty;
-    return { ok: true, msg: `Shorted ${qty} ${t} @ $${st.price.toFixed(2)}` };
-  }
-  function cover(G, t, qty, quiet) {
-    const st = G.stocks[t], sh = G.shorts[t]; qty = Math.floor(qty);
-    if (!sh || qty < 1 || qty > sh.shares) return { ok: false, msg: "You're not short that many shares." };
-    const c = quiet ? 0 : commission(G);
-    G.cash -= qty * st.price + c; G.stats.fees += c; G.stats.trades++;
-    const gain = (sh.entry - st.price) * qty - c;
-    realize(G, gain); if (gain > 0) G.flags.shortWin = true;
-    sh.shares -= qty;
-    if (sh.shares === 0) delete G.shorts[t];
-    return { ok: true, msg: `Covered ${qty} ${t} @ $${st.price.toFixed(2)}` };
+    G.fined = true; G.flags.fined = true;
+    const fine = Math.max(10000, sec.profit * 3), msgs = [];
+    if (liquidateFor(G, () => fine, msgs)) {
+      G.cash -= fine;
+      const text = `CFTC SETTLEMENT: trading ahead of customers. You disgorge profits and pay a ${money(fine)} fine.${msgs.length ? ' ' + msgs.join('. ') + '.' : ''} One more strike and it's prison.`;
+      addNews(G, 'life', text); events.push({ kind: 'sec', text });
+    } else goHomeless(G, events, `The CFTC fines you ${money(fine)}. You can't pay and everything is seized. You're on the street.`);
   }
 
   // ---------------------------------------------------------------- achievements
   const ACH = [
-    { id: 'first', emoji: '🧾', name: 'First Trade', desc: 'Make your first trade.', test: (G) => G.stats.trades >= 1 },
+    { id: 'first', emoji: '🧾', name: 'First Trade', desc: 'Make your first trade in the pit.', test: (G) => G.stats.trades >= 1 },
     { id: 'nw25k', emoji: '🌱', name: 'In the Green', desc: 'Reach $25,000 net worth.', test: (G) => netWorth(G) >= 25e3 },
     { id: 'nw100k', emoji: '💵', name: 'Six Figures', desc: 'Reach $100,000 net worth.', test: (G) => netWorth(G) >= 1e5 },
     { id: 'nw1m', emoji: '🤑', name: 'Millionaire', desc: 'Reach $1,000,000 net worth.', test: (G) => netWorth(G) >= 1e6 },
@@ -558,25 +527,29 @@
     { id: 'rolex', emoji: '⌚', name: 'Time Is Money', desc: 'Buy the Rolex.', test: (G) => G.lux.includes('rolex') },
     { id: 'mansion', emoji: '🏰', name: 'Lifestyles of the Rich', desc: 'Live in the Hamptons mansion.', test: (G) => G.home === 5 },
     { id: 'jet', emoji: '🛩️', name: 'Frequent Flyer', desc: 'Own a private jet share.', test: (G) => G.lux.includes('jet') },
-    { id: 'short', emoji: '🐻', name: 'Bear Necessities', desc: 'Close a profitable short.', test: (G) => G.flags.shortWin },
-    { id: 'tenx', emoji: '🚀', name: 'To the Moon', desc: 'Sell a stock at 5x your cost.', test: (G) => G.flags.tenx },
-    { id: 'margin', emoji: '📞', name: 'Leverage Is a Hell of a Drug', desc: 'Get a margin call.', test: (G) => G.flags.margin },
-    { id: 'bust', emoji: '💥', name: 'Pets.com Victim', desc: 'Lose $10,000+ on a bankrupt stock.', test: (G) => G.flags.bust },
-    { id: 'insider', emoji: '🤫', name: 'Gekko Wannabe', desc: 'Profit from an insider tip.', test: (G) => G.flags.insiderWin },
-    { id: 'sec', emoji: '⚖️', name: 'Boesky Moment', desc: 'Get fined by the SEC.', test: (G) => G.flags.fined },
+    { id: 'scalper', emoji: '⚡', name: 'Scalper', desc: 'Close 10 winning trades in a single session.', test: (G) => G.flags.scalper },
+    { id: 'bigday', emoji: '🔔', name: 'Ring the Bell', desc: 'Make $10,000 in a single session.', test: (G) => G.flags.bigDay },
+    { id: 'streak5', emoji: '🔥', name: 'Hot Streak', desc: 'Win 5 sessions in a row.', test: (G) => G.flags.streak5 },
+    { id: 'headline', emoji: '📰', name: 'Headline Hunter', desc: 'Make $2,000+ in a session with a historic headline.', test: (G) => G.flags.headline },
+    { id: 'stop', emoji: '🛑', name: 'Cut Your Losses', desc: 'Get stopped out.', test: (G) => G.flags.stop },
+    { id: 'margin', emoji: '📞', name: 'Margin Call', desc: 'Get liquidated by your clearing firm.', test: (G) => G.flags.margin },
+    { id: 'gap', emoji: '🕳️', name: 'Gap Risk', desc: 'Lose $5,000+ overnight on a gap.', test: (G) => G.flags.gap },
+    { id: 'bond', emoji: '📜', name: 'Bond Vigilante', desc: 'Trade the T-Bond pit.', test: (G) => G.flags.bond },
+    { id: 'spx', emoji: '📈', name: 'Big Board', desc: 'Trade the S&P 500 pit.', test: (G) => G.flags.spx },
+    { id: 'front', emoji: '🤫', name: 'Trading Ahead', desc: 'Profit from front-running a customer.', test: (G) => G.flags.frontWin },
+    { id: 'sec', emoji: '⚖️', name: 'The Sting', desc: 'Get fined for trading ahead.', test: (G) => G.flags.fined },
     { id: 'prison', emoji: '⛓️', name: 'Club Fed', desc: 'Go to federal prison.', test: (G) => G.over === 'prison' },
-    { id: 'tax', emoji: '🏛️', name: 'Uncle Sam Thanks You', desc: 'Pay $10,000+ in capital-gains tax.', test: (G) => (G.flags.taxPaid || 0) >= 1e4 },
+    { id: 'tax', emoji: '🏛️', name: 'Uncle Sam Thanks You', desc: 'Pay $10,000+ in taxes.', test: (G) => (G.flags.taxPaid || 0) >= 1e4 },
     { id: 'comeback', emoji: '🔥', name: 'Comeback Kid', desc: 'Fall below $500, then climb back above $50,000.', test: (G) => G.flags.low && netWorth(G) >= 5e4 },
     { id: 'rock', emoji: '🥫', name: 'Rock Bottom', desc: 'End up homeless.', test: (G) => G.over === 'homeless' },
     { id: 'y2k', emoji: '🎆', name: 'Y2K Survivor', desc: 'Make it to the end of the decade.', test: (G) => G.over === 'end' },
-    { id: 'index', emoji: '📊', name: 'Slow and Steady', desc: 'Finish the game holding $10,000+ of the Index Fund.', test: (G) => G.over === 'end' && G.holdings.IDX && G.holdings.IDX.shares * G.stocks.IDX.price >= 1e4 },
   ];
   function checkAchievements(G) {
     const fresh = [];
     for (const a of ACH) {
       if (G.ach[a.id]) continue;
       let ok = false; try { ok = !!a.test(G); } catch (e) {}
-      if (ok) { G.ach[a.id] = G.week; fresh.push(a); }
+      if (ok) { G.ach[a.id] = G.day; fresh.push(a); }
     }
     return fresh;
   }
@@ -585,7 +558,7 @@
   function moveHome(G, id) {
     if (id === G.home) return { ok: false, msg: 'You already live here.' };
     const deposit = id > G.home ? HOMES[id].rent * 2 : 0;
-    if (G.cash < deposit) return { ok: false, msg: 'Need first + last month: $' + deposit.toLocaleString() };
+    if (G.cash - deposit < marginUsed(G)) return { ok: false, msg: 'Need first + last month: $' + deposit.toLocaleString() };
     G.cash -= deposit; G.home = id;
     addNews(G, 'life', `You moved into a ${HOMES[id].name}.`);
     return { ok: true, msg: `Moved to ${HOMES[id].name}` };
@@ -595,7 +568,7 @@
     if (cat === 'lux') {
       const it = LUX.find((l) => l.id === id);
       if (G.lux.includes(id)) return { ok: false, msg: 'Already owned.' };
-      if (G.cash < it.price) return { ok: false, msg: 'Not enough cash.' };
+      if (G.cash - it.price < marginUsed(G)) return { ok: false, msg: 'Not enough cash.' };
       G.cash -= it.price; G.lux.push(id);
       addNews(G, 'life', `You bought: ${it.name}.`);
       return { ok: true, msg: `Bought ${it.name}` };
@@ -603,7 +576,7 @@
     const list = cat === 'car' ? CARS : TECH, cur = G[cat], it = list[id];
     if (id <= cur) return { ok: false, msg: 'You already have something better.' };
     const net = it.price - SELL_RATIO * list[cur].price;
-    if (G.cash < net) return { ok: false, msg: 'Not enough cash (trade-in applied: $' + Math.round(net).toLocaleString() + ').' };
+    if (G.cash - net < marginUsed(G)) return { ok: false, msg: 'Not enough cash (trade-in applied: $' + Math.round(net).toLocaleString() + ').' };
     G.cash -= net; G[cat] = id;
     addNews(G, 'life', `You upgraded to: ${it.name}.`);
     return { ok: true, msg: `Upgraded to ${it.name}` };
@@ -621,11 +594,11 @@
   }
 
   const api = {
-    START_CASH, SELL_RATIO, SAVE_VERSION, TAX_RATE, MARGIN_RATE, MAINT, STOCKS, HOMES, CARS, TECH, LUX, RANKS, ACH,
-    newGame, advanceWeek, buy, sell, short, cover, maxBuy, maxShort, buyItem, sellItem, moveHome,
-    acceptOffer, declineOffer, checkAchievements,
-    netWorth, stockValue, shortValue, assetValue, gross, equity, marginDebt, marginLevel,
-    monthlyCosts, monthlyIncome, commission, rankOf, dateOf, livingCost,
+    START_CASH, SELL_RATIO, SAVE_VERSION, TAX_RATE, MAINT, N_STEPS, STEP_MS, CONTRACTS, CBY, HOMES, CARS, TECH, LUX, RANKS, ACH, ERA_EVENTS,
+    newGame, startSession, stepSession, trade, flatten, setStop, respondOffer, skipDays, recentFlow, shoutsNow,
+    buyItem, sellItem, moveHome, checkAchievements,
+    netWorth, equity, unreal, maxLots, marginUsed, marginLevel, markT, monthlyCosts, monthlyIncome, rankOf, livingCost,
+    dateOfDay, clockOf, fmtPrice, priceOf, bidT,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;

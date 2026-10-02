@@ -24,6 +24,9 @@
   const N = { C5: 523, E5: 659, G5: 784, C6: 1047, E6: 1319, A4: 440, F4: 349, D4: 294, C4: 262, G4: 392 };
   const SOUNDS = {
     tap: () => tone(700, .04, 'square', .04),
+    fill: () => tone(980, .05, 'square', .05),
+    bell: () => { tone(1568, .5, 'sine', .09); tone(2093, .6, 'sine', .06, .02); },
+    shout: () => tone(180 + Math.random() * 60, .04, 'sawtooth', .02),
     week: () => tone(300, .03, 'triangle', .05),
     buy: () => { tone(N.E6, .07, 'square', .06); tone(N.C6 * 1.5, .16, 'square', .06, .07); },       // cha-ching
     sell: () => { tone(N.C6, .07, 'square', .06); tone(N.G5, .07, 'square', .06, .07); tone(N.C6, .14, 'square', .06, .14); },

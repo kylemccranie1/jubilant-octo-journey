@@ -1,6 +1,6 @@
 {
-  "appId": "com.example.wallstreet90",
-  "appName": "Wall Street '90",
+  "appId": "com.example.pit90",
+  "appName": "The Pit '90",
   "webDir": "www",
   "backgroundColor": "#06080f",
   "ios": { "contentInset": "always" },

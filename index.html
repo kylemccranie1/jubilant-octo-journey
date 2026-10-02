@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#06080f">
-<title>Wall Street '90</title>
+<title>The Pit '90</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -16,25 +16,41 @@
   <header id="top"></header>
   <div id="tape"><span id="tapeText"></span></div>
   <main id="view"></main>
-  <div id="actions">
-    <button id="btnWeek" class="primary">Next Week ▶</button>
-    <button id="btnMonth">+1 Month ▶▶</button>
-  </div>
+  <div id="actions"><button id="btnBell" class="primary">🔔 Open the Bell</button></div>
   <nav id="tabs"></nav>
 </div>
 
-<div id="sheet" class="hidden"><div class="sheet-card" id="sheetCard"></div></div>
+<!-- live trading floor -->
+<div id="pit" class="hidden">
+  <div class="pit-top">
+    <div><b id="pName"></b> <span id="pClock" class="dim mono"></span></div>
+    <div class="pit-btns"><button id="pPause" aria-label="Pause">⏸</button><button id="pSpeed">1×</button></div>
+  </div>
+  <div class="pit-bar"><i id="pProg"></i></div>
+  <div class="pit-price"><span id="pLast" class="mono"></span><span id="pChg" class="mono"></span><span id="pBA" class="mono dim"></span></div>
+  <div id="pBanner" class="banner hidden"></div>
+  <canvas id="pChart"></canvas>
+  <div id="pShouts"></div>
+  <div id="pPos" class="pit-pos"></div>
+  <div class="pit-ctl">
+    <div class="chips" id="pQty"></div>
+    <div class="row-btns"><button id="pStop">Stop: Off</button><button id="pFlat">FLATTEN</button><button id="pFF">Skip to close ⏭</button></div>
+    <div class="two"><button id="pSell" class="sell big2">SELL</button><button id="pBuy" class="buy big2">BUY</button></div>
+  </div>
+  <div id="pPaused" class="hidden"><div>⏸ PAUSED<small>No trading while paused</small><button id="pResume" class="primary">Resume</button><button id="pLeave" style="margin-top:8px">Save &amp; leave the floor</button></div></div>
+</div>
+
 <div id="modal" class="hidden"><div class="modal-card" id="modalCard"></div></div>
 <div id="toast" class="hidden"></div>
 
 <div id="title">
   <div class="title-card">
-    <div class="logo">WALL STREET<span>'90</span></div>
-    <p>It's 1990. You've got $8,000, a landline and big dreams.<br>
-    Trade your way from a roach-motel studio to a Hamptons mansion — or lose it all and end up on the street.</p>
+    <div class="logo">THE PIT<span>'90</span></div>
+    <p>Chicago, 1990. You've got $8,000, a colored jacket and a spot in the soybean pit.<br>
+    Read the crowd, scalp the ticks, and trade your way from a roach-motel studio to a Hamptons mansion — or blow up and end up on the street.</p>
     <button id="btnNew" class="primary big">New Game</button>
     <button id="btnContinue" class="big hidden">Continue</button>
-    <small>Greed is good. Rent is due.</small>
+    <small>Buy low. Sell high. Don't get liquidated.</small>
   </div>
 </div>
 
