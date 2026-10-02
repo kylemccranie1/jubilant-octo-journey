@@ -1,8 +1,8 @@
 {
-  "name": "wall-street-90",
+  "name": "the-pit-90",
   "version": "1.0.0",
   "private": true,
-  "description": "A 1990s stock trading game for mobile",
+  "description": "A real-time 1990s pit-trading game for mobile",
   "scripts": {
     "test": "node test/sim.js",
     "serve": "python3 -m http.server 8000",
