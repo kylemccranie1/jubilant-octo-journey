@@ -29,15 +29,15 @@
   // anchors: approximate real price history; the game's price wanders around this path
   const A = (y, m, p) => [Date.UTC(y, m - 1, 1), p];
   const CONTRACTS = [
-    { sym: 'SOY', name: 'Soybeans', pit: 'CBOT Grain Pit', emoji: '🌱', tick: .25, tickVal: 12.5, vol: .011, margin: 1000, depth: 15, act: 0.66, bias: 0.95, unlock: 0,
+    { sym: 'SOY', name: 'Soybeans', pit: 'CBOT Grain Pit', emoji: '🌱', tick: .25, tickVal: 12.5, vol: .011, margin: 1000, depth: 15, act: 0.66, bias: 0.95, nk: 0.7, unlock: 0,
       anchors: [A(1990, 1, 570), A(1991, 1, 600), A(1993, 1, 580), A(1993, 8, 700), A(1994, 6, 660), A(1996, 6, 800), A(1997, 6, 830), A(1998, 6, 640), A(1999, 6, 480), A(2000, 6, 530), A(2000, 12, 520)] },
-    { sym: 'CRUDE', name: 'Crude Oil', pit: 'NYMEX Energy Pit', emoji: '🛢️', tick: .01, tickVal: 10, vol: .018, margin: 2000, depth: 12, act: 0.92, bias: 0.7, unlock: 12000,
+    { sym: 'CRUDE', name: 'Crude Oil', pit: 'NYMEX Energy Pit', emoji: '🛢️', tick: .01, tickVal: 10, vol: .018, margin: 2000, depth: 12, act: 0.92, bias: 0.8, nk: 0.6, unlock: 12000,
       anchors: [A(1990, 1, 21), A(1990, 7, 17), A(1990, 10, 37), A(1991, 2, 20), A(1992, 6, 21), A(1994, 6, 18), A(1996, 12, 25), A(1998, 12, 11), A(1999, 12, 25), A(2000, 9, 33), A(2000, 12, 26)] },
-    { sym: 'DM', name: 'Deutschmark', pit: 'CME Currency Pit', emoji: '💶', tick: .0001, tickVal: 12.5, vol: .006, margin: 2000, depth: 12, act: 0.88, bias: 0.7, unlock: 40000,
+    { sym: 'DM', name: 'Deutschmark', pit: 'CME Currency Pit', emoji: '💶', tick: .0001, tickVal: 12.5, vol: .006, margin: 2000, depth: 12, act: 0.86, bias: 0.8, nk: 0.6, unlock: 40000,
       anchors: [A(1990, 1, .60), A(1992, 9, .70), A(1993, 6, .62), A(1995, 4, .73), A(1997, 7, .54), A(1999, 1, .59), A(2000, 10, .43), A(2000, 12, .46)] },
-    { sym: 'BOND', name: 'T-Bonds', pit: 'CBOT Financial Pit', emoji: '📜', tick: 1 / 32, tickVal: 31.25, vol: .006, margin: 3000, depth: 10, act: 0.58, bias: 0.7, unlock: 150000,
+    { sym: 'BOND', name: 'T-Bonds', pit: 'CBOT Financial Pit', emoji: '📜', tick: 1 / 32, tickVal: 31.25, vol: .006, margin: 3000, depth: 10, act: 0.5, bias: 0.8, nk: 0.8, unlock: 150000,
       anchors: [A(1990, 1, 91), A(1991, 6, 97), A(1993, 10, 117), A(1994, 11, 98), A(1995, 12, 118), A(1996, 6, 108), A(1998, 10, 126), A(2000, 1, 98), A(2000, 12, 112)] },
-    { sym: 'SPX', name: 'S&P 500', pit: 'CME Index Pit', emoji: '📈', tick: .05, tickVal: 25, vol: .009, margin: 9000, depth: 8, act: 1.0, bias: 0.35, unlock: 600000,
+    { sym: 'SPX', name: 'S&P 500', pit: 'CME Index Pit', emoji: '📈', tick: .05, tickVal: 25, vol: .009, margin: 9000, depth: 8, act: 1.2, bias: 0.7, nk: 0.7, unlock: 600000,
       anchors: [A(1990, 1, 353), A(1990, 10, 295), A(1991, 6, 375), A(1992, 6, 410), A(1994, 6, 450), A(1995, 6, 540), A(1996, 6, 670), A(1997, 6, 880), A(1998, 6, 1130), A(1998, 10, 960), A(1999, 6, 1330), A(2000, 3, 1500), A(2000, 12, 1320)] },
   ];
   const CBY = {}; CONTRACTS.forEach((c) => { CBY[c.sym] = c; });
@@ -367,8 +367,8 @@
       S.totJ = J;
     }
     if (!training && netWorth(G) >= 15000 && !G.sec && G.day - G.lastOffer >= 15 && rnd(G) < .10) {
-      const side = rnd(G) < .5 ? 1 : -1, t0 = 100 + Math.floor(rnd(G) * 250), lots = dpth0(sym) * pick(G, [6, 10, 15, 20]);
-      S.offer = { t: t0, side, lots, jt: t0 + 30, bonus: lots * 2.5, resolved: null };
+      const side = rnd(G) < .5 ? 1 : -1, t0 = 100 + Math.floor(rnd(G) * 250), lots = dpth0(sym) * pick(G, [3, 5, 7, 10]);
+      S.offer = { t: t0, side, lots, jt: t0 + 30, bonus: Math.round(lots * CBY[sym].tickVal * 0.8), resolved: null };
       G.lastOffer = G.day;
     }
     S.startEq = equity(G);
@@ -388,13 +388,13 @@
     if (!forced && Math.abs(next) > Math.abs(cur) && Math.abs(next) > maxLots(G, S.sym)) {
       return { ok: false, msg: `Margin: ${S.sym} needs ${money(marginOf(G, S.sym))}/lot — you can hold ${maxLots(G, S.sym)}.` };
     }
-    const before = side > 0 ? S.ask : S.bid;
+    const before = side > 0 ? S.ask : S.bid, mid0 = midOf(S);
     const { filled, vwap } = sweep(G, S, side, qty, 'me');
     const r = applyFill(G, S, side, filled, vwap, false);
     S.imb += side * filled / dpth(S) * 0.5;
     // the crowd notices an aggressive player and briefly piles on
     S.react = { dir: side, left: 6, str: Math.min(0.04, 0.02 * filled / dpth(S)) };
-    S.rev = { dir: -side, left: 40, age: 0, str: Math.min(0.12, 0.05 * filled / dpth(S)) };
+    S.rev = { dir: -side, left: 50, age: 0, str: Math.min(0.18, 0.08 * filled / dpth(S)), anchor: mid0 };
     const o = S.offer;
     if (o && o.resolved === 'ahead' && !forced && side === o.side && S.t >= o.t && S.t <= o.jt && Math.abs(next) > Math.abs(cur) && !S.aheadEntry) S.aheadEntry = { px: vwap, qty: filled };
     const slipTicks = Math.abs(vwap - before);
@@ -449,24 +449,36 @@
     return sum;
   }
   // The on-screen "lean call": computed ONLY from what the player can see (big crowd prints in the last ~25 steps)
-  const LEAN_WIN = 30, LEAN_T = [1.5, 3, 5], LEAN_PUR = 0.4, LEAN_MIN = 0.5; // window (steps), strength thresholds (x level depth), purity, min print size (x depth)
+  const LEAN_WIN = 30, LEAN_T = [2, 4, 6.5], LEAN_PUR = 0.4, LEAN_MIN = 0.9; // thresholds are in units of one informed block (level depth x pit activity); LEAN_MIN = smallest print that counts // window (steps), strength thresholds (x level depth), purity, min print size (x depth)
   function leanSignal(G, win) {
     const S = G.sess; win = win || LEAN_WIN;
     const out = { dir: 0, strength: 0, net: 0, bb: 0, bs: 0, lb: 0, ls: 0 };
     if (!S) return out;
-    const D = dpth(S);
+    const D = dpth(S), U = D * CBY[S.sym].act; // U = size of a typical informed block
     for (let i = S.prints.length - 1; i >= 0; i--) {
       const p = S.prints[i]; if (p[0] <= S.t - win) break;
-      if (p[4] === 'me' || p[4] === 'mine' || p[2] < D * LEAN_MIN) continue;
+      if (p[4] === 'me' || p[4] === 'mine' || p[2] < U * LEAN_MIN) continue;
       out.net += p[1] * p[2];
       if (p[1] > 0) { out.bb++; out.lb += p[2]; } else { out.bs++; out.ls += p[2]; }
     }
-    const a = Math.abs(out.net) / D, vol = out.lb + out.ls, purity = vol ? Math.abs(out.net) / vol : 0;
+    const a = Math.abs(out.net) / U, vol = out.lb + out.ls, purity = vol ? Math.abs(out.net) / vol : 0;
     let st = a >= LEAN_T[2] ? 3 : a >= LEAN_T[1] ? 2 : a >= LEAN_T[0] ? 1 : 0;
     if (purity < LEAN_PUR) st = 0; // mixed buying and selling is chop, not a lean
     out.strength = st; out.dir = st ? Math.sign(out.net) : 0;
     return out;
   }
+  // The call the UI shows: raw leanSignal with hysteresis so it doesn't flicker (strong calls are held a few seconds and fade, not vanish)
+  function updateLeanCall(S, G) {
+    const raw = leanSignal(G), c = S.call || (S.call = { dir: 0, strength: 0, hold: 0, fading: false });
+    if (raw.strength >= 1 && (c.strength === 0 || raw.dir === c.dir) && raw.strength >= c.strength) { c.dir = raw.dir; c.strength = raw.strength; c.hold = raw.strength >= 2 ? 14 : 6; c.fading = false; }
+    else if (raw.strength >= 1 && raw.dir !== c.dir && (c.strength <= 1 || raw.strength >= 2)) { c.dir = raw.dir; c.strength = raw.strength; c.hold = raw.strength >= 2 ? 14 : 6; c.fading = false; }
+    else if (c.strength > 0) { // underlying signal is weaker than what we show
+      if (c.hold > 0) c.hold--;
+      else { c.strength = Math.max(raw.strength, c.strength - 1); c.hold = 6; c.fading = c.strength > 0; if (c.strength === 0) c.dir = 0; }
+    }
+    return c;
+  }
+  const leanCall = (G) => (G.sess ? (G.sess.call || { dir: 0, strength: 0, fading: false }) : { dir: 0, strength: 0, fading: false });
   // order-flow "delta" bars: net aggressive lots per bucket of `size` steps, oldest first (in units of level depth)
   function deltaBars(G, buckets, size) {
     const S = G.sess, out = new Array(buckets).fill(0);
@@ -490,7 +502,7 @@
   }
 
   function newRegime(G, S) {
-    const len = 20 + Math.floor(rnd(G) * 60), r = rnd(G), f = r < .2 ? 0 : (r < .6 ? 1 : -1), s = .4 + .6 * rnd(G);
+    const len = 14 + Math.floor(rnd(G) * 46), r = rnd(G), f = r < .2 ? 0 : (r < .6 ? 1 : -1), s = .4 + .6 * rnd(G);
     S.regime = { f, s, left: len };
     S.hint = rnd(G) < TECH[G.tech].rel ? f : (rnd(G) < .5 ? 1 : -1);
   }
@@ -522,8 +534,9 @@
     if (S.react) p += S.react.dir * S.react.str * (S.react.left / 6);
     p = clamp(p, 0.06, 0.94);
     const side = rnd(G) < p ? 1 : -1;
-    let u = rnd(G), k = 0; while (k < NOISE_W.length - 1 && u > NOISE_W[k]) { u -= NOISE_W[k]; k++; }
-    const lots = Math.max(1, Math.round(dpth(S) * c.act * SIZE_F[k] * (1 + 1.5 * burstFrac * (S.burst ? S.burst.size : 1))));
+    const inBurst = !!S.burst && rnd(G) < burstFrac, W = inBurst ? SIZE_W : NOISE_W, nk = inBurst ? 1 : (c.nk || 1);
+    let u = rnd(G), k = 0; while (k < W.length - 1 && u > W[k]) { u -= W[k]; k++; }
+    const lots = Math.max(1, Math.round(dpth(S) * c.act * nk * SIZE_F[k] * (1 + 3 * burstFrac * (S.burst ? S.burst.size : 1))));
     const r = sweep(G, S, side, lots, 'pit');
     S.imb += side * r.filled / dpth(S);
   }
@@ -544,7 +557,8 @@
     const t = S.t, c = CBY[S.sym];
     for (const ev of S.events) if (ev.t === t) {
       const len = Math.round(clamp(Math.abs(ev.jump) / dpth(S), 16, 40));
-      S.fundJ += ev.jump; S.burst = { dir: Math.sign(ev.jump) || 1, left: len, max: len, size: Math.min(S.sym === 'BOND' ? 1.5 : 2.5, Math.max(1, Math.abs(ev.jump) / (4 * dpth(S)))), tilt: clamp(Math.abs(ev.jump) / (3 * dpth(S)), 0.4, 1) };
+      // headline crowd strength is [floor, cap] per pit (x one informed block)
+      S.fundJ += ev.jump; S.burst = { dir: Math.sign(ev.jump) || 1, left: len, max: len, size: (() => { const fc = { SOY: [1.7, 3.3], CRUDE: [1.4, 3], DM: [1.3, 2.4], BOND: [1.2, 2.0], SPX: [1.0, 1.0] }[S.sym] || [1, 2]; return Math.min(fc[1], Math.max(fc[0], Math.abs(ev.jump) / (4 * dpth(S)))); })(),  tilt: clamp(Math.abs(ev.jump) / (3 * dpth(S)), 0.4, 1) };
       addNews(G, 'mkt', ev.text); events.push({ kind: 'headline', text: ev.text, jump: ev.jump, scripted: ev.scripted });
     }
     const o = S.offer;
@@ -562,12 +576,17 @@
     if (mult > 1.5 && rnd(G) < SHOUT_RATE * (mult - 1)) n++;
     for (let i = 0; i < n; i++) crowdOrder(G, S, burstFrac);
     informedOrder(G, S);
+    if (S.rev && S.rev.age >= 2 && (midOf(S) - S.rev.anchor) * -S.rev.dir > 0.5) { // liquidity providers lean back against impact (yours, or a customer block) with real orders, only until price is back where it started
+      const c2 = CBY[S.sym], pr = Math.min(0.5, S.rev.str * 0.8 * (S.rev.left / 50));
+      if (rnd(G) < pr) { const r = sweep(G, S, S.rev.dir, Math.max(1, Math.round(dpth(S) * c2.act * (0.5 + rnd(G)))), 'pit'); S.imb += S.rev.dir * r.filled / dpth(S); }
+    }
     for (let r = RETAIL_RATE; r > 0; r -= 1) {
       if (rnd(G) < Math.min(1, r)) sweep(G, S, rnd(G) < 0.5 ? 1 : -1, Math.max(1, Math.round(dpth(S) * 0.09 * (0.5 + rnd(G)))), 'retail');
     }
+    if (o && t === o.jt) o.anchor = midOf(S);
     if (o && o.resolved && t >= o.jt && t < o.jt + 4) { // the customer's block hits the book in chunks
       const r = sweep(G, S, o.side, Math.ceil(o.lots / 4), 'block'); S.imb += o.side * r.filled / dpth(S);
-      if (t === o.jt + 3) S.rev = { dir: -o.side, left: 40, age: 0, str: 0.2 };
+      if (t === o.jt + 3) S.rev = { dir: -o.side, left: 50, age: 0, str: 0.35, anchor: o.anchor };
     }
     S.flowEma = 0.96 * S.flowEma + 0.04 * S.stepFlow / dpth(S);
     if (S.burst && --S.burst.left <= 0) S.burst = null;
@@ -575,6 +594,7 @@
     if (S.rev) { S.rev.age++; if (--S.rev.left <= 0) S.rev = null; }
     ensureDepth(G, S, 5);
     S.path.push(midOf(S));
+    updateLeanCall(S, G);
 
     if (o && o.resolved === 'ahead' && t === o.jt + 8) settleFrontRun(G, events);
     if (G.pos) {
@@ -963,7 +983,7 @@
 
   const api = {
     START_CASH, SELL_RATIO, SAVE_VERSION, TAX_RATE, MAINT, N_STEPS, STEP_MS, CONTRACTS, CBY, HOMES, CARS, TECH, LUX, RANKS, ACH, ERA_EVENTS,
-    newGame, startSession, stepSession, CAREER, RIVALS, marginOf, feeOf, liqPrice, rankings, inflation, trade, flatten, setStop, placeLimit, cancelOrders, preview, forceRegime, inject, respondOffer, skipDays, recentFlow, flowGauge, leanSignal, deltaBars, shoutsNow, ladder, quote,
+    newGame, startSession, stepSession, CAREER, RIVALS, marginOf, feeOf, liqPrice, rankings, inflation, trade, flatten, setStop, placeLimit, cancelOrders, preview, forceRegime, inject, respondOffer, skipDays, recentFlow, flowGauge, leanSignal, leanCall, deltaBars, shoutsNow, ladder, quote,
     buyItem, sellItem, moveHome, checkAchievements,
     netWorth, equity, unreal, maxLots, marginUsed, marginLevel, markT, monthlyCosts, monthlyIncome, rankOf, livingCost,
     dateOfDay, clockOf, fmtPrice, priceOf,
