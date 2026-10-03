@@ -128,7 +128,7 @@
       <div class="stat"><small>Peak</small><b>${big(s.peak)}</b></div>
       <div class="stat"><small>Realized P/L</small><b class="${cls(s.realized)}">${big(s.realized)}</b></div>
       <div class="stat"><small>Fees paid</small><b>${money(s.fees)}</b></div>
-      <div class="stat"><small>Sessions · trades</small><b>${s.sessions} · ${s.trades}</b></div>
+      <div class="stat"><small>Sessions · fills</small><b>${s.sessions} · ${s.trades}</b></div>
       <div class="stat"><small>Win rate</small><b>${wr}</b></div>
       <div class="stat"><small>Best / worst session</small><b><span class="up">${sgn(s.bestDay)}</span> / <span class="down">${sgn(s.worstDay)}</span></b></div>
       <div class="stat"><small>Win streak</small><b>${s.streak}</b></div>
@@ -138,7 +138,7 @@
     if (G.heat) html += `<div class="card" style="margin-top:6px;font-size:12px">🕵️ Compliance heat: <b>${'🔥'.repeat(G.heat)}</b>${G.fined ? ' · <span class="down">Already fined — next time is prison</span>' : ''}</div>`;
     if (G.lastSession) {
       const l = G.lastSession;
-      html += `<h2>Last session</h2><div class="card">${E.CBY[l.sym].emoji} ${l.sym} · <b class="${cls(l.pnl)}">${sgn(l.pnl)}</b> · ${l.trades} trades, ${l.wins} winners</div>`;
+      html += `<h2>Last session</h2><div class="card">${E.CBY[l.sym].emoji} ${l.sym} · <b class="${cls(l.pnl)}">${sgn(l.pnl)}</b> · ${l.trades} fills, ${l.wins} winning round trips</div>`;
     }
     const yrNow = nw - G.yr.nw0;
     html += `<h2>${G.yr.year} so far</h2><div class="card" style="font-size:13px">Net worth <b class="${cls(yrNow)}">${sgn(yrNow)}</b> this year · ${G.yr.sessions} sessions · best <b class="up">${sgn(G.yr.best)}</b> · worst <b class="down">${sgn(G.yr.worst)}</b></div>`;
@@ -218,7 +218,7 @@
         await showModal({
           kind: s.pnl >= 0 ? 'good' : 'bad', title: '🔔 Closing bell',
           body: `<p class="mono" style="font-size:30px;margin:4px 0;color:var(--${s.pnl >= 0 ? 'up' : 'down'})">${sgn(s.pnl)}</p>
-            <p>${c.name} · ${s.trades} trades · ${s.wins} winners</p>${s.overnight ? '<p class="dim">You\'re holding a position overnight.</p>' : ''}`,
+            <p>${c.name} · ${s.trades} fills · ${s.wins} winning round trips</p>${s.overnight ? '<p class="dim">You\'re holding a position overnight.</p>' : ''}`,
         });
       } else if (e.kind === 'review') {
         const r = e.review, up = r.pnl >= 0;
@@ -398,27 +398,33 @@
 
   // the big, plain-English read of the tape (plus order-flow bars and a one-line coach)
   function drawLean(S) {
-    const L = E.leanSignal(G), p = G.pos, c = E.CBY[S.sym];
-    const el = $('pLean'), arrows = L.dir > 0 ? '▲'.repeat(L.strength) : '▼'.repeat(L.strength);
-    let main, coach;
-    if (L.strength === 0) { main = '◆ CHOP'; coach = 'No clear lean. Stand aside.'; }
-    else if (L.strength === 1) { main = `${arrows} ${L.dir > 0 ? 'BUY' : 'SELL'} LEAN FORMING`; coach = 'Wait for one more big print on the same side.'; }
-    else { main = `${arrows} ${L.dir > 0 ? 'BUYERS' : 'SELLERS'} IN CONTROL`; coach = `${L.bb} big buys (${L.lb} lots) vs ${L.bs} big sells (${L.ls} lots).`; }
+    const L = E.leanSignal(G), C = E.leanCall(G), p = G.pos;
+    const el = $('pLean'), arrows = C.dir > 0 ? '▲'.repeat(C.strength) : '▼'.repeat(C.strength);
+    const side = C.dir > 0 ? 'BUY' : 'SELL';
+    let main, coach, bad = false;
+    if (C.strength === 0) { main = '◆ CHOP'; coach = 'No clear lean. Stand aside.'; }
+    else if (C.strength === 1) { main = `${arrows} ${side} LEAN?`; coach = 'Not yet: wait for a 2nd big print on the same side.'; }
+    else { main = `${arrows} ${C.dir > 0 ? 'BUYERS' : 'SELLERS'}${C.strength >= 3 ? ' SURGE' : ''}`; coach = `${L.bb} big buys vs ${L.bs} big sells.`; }
+    if (C.fading && C.strength > 0) main += ' · FADING';
     if (!(live && live.coachOff)) {
       if (p) {
-        const withIt = L.dir === Math.sign(p.qty);
-        coach = L.strength === 0 ? 'Flow has faded. Take profit or tighten up.' : (withIt ? 'Flow is WITH you. Hold, or take profit with a limit order.' : 'Flow turned AGAINST you. Consider exiting.');
-      } else if (L.strength >= 2) coach += ` ${L.dir > 0 ? 'Buy' : 'Sell'} 1–2 lots, exit when it flips.`;
+        const withIt = C.dir === Math.sign(p.qty);
+        if (C.strength === 0) coach = 'Flow has faded. Take profit or tighten up.';
+        else if (withIt) coach = C.fading ? 'Flow is fading. Think about taking profit.' : 'Flow is WITH you. Hold, or take profit with a limit order.';
+        else { coach = 'EXIT NOW: flow turned AGAINST you.'; bad = true; }
+      } else if (C.strength >= 2 && !C.fading) coach += ` ${C.dir > 0 ? 'Buy' : 'Sell'} 1–2 lots, exit when it flips.`;
     } else coach = '';
     if (G.tech >= 1) main += `  · Intel ${S.hint > 0 ? '▲' : S.hint < 0 ? '▼' : '–'}`;
     $('pLeanMain').textContent = main; $('pLeanCoach').textContent = coach;
-    el.className = 'lean ' + (L.strength === 0 ? 'chop' : (L.dir > 0 ? 'up' : 'down')) + (L.strength >= 2 ? ' strong' : '');
+    $('pLeanCoach').className = bad ? 'bad' : '';
+    el.className = 'lean ' + (C.strength === 0 ? 'chop' : (C.dir > 0 ? 'up' : 'down')) + (C.strength >= 2 && !C.fading ? ' strong' : '');
     // order-flow bars: net aggressive buying/selling over the last ~12 seconds
     const cv = $('pDelta'), r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
     if (cv.width !== Math.round(r.width * dpr)) { cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr); }
     const g = cv.getContext('2d'), W = cv.width, H = cv.height, n = 30, bars = E.deltaBars(G, n, 3), bw = W / n, mid = H / 2;
     g.clearRect(0, 0, W, H);
     g.strokeStyle = 'rgba(255,255,255,.25)'; g.lineWidth = 1; g.beginPath(); g.moveTo(0, mid); g.lineTo(W, mid); g.stroke();
+    g.fillStyle = 'rgba(255,255,255,.5)'; g.font = `${Math.round(9 * dpr)}px ui-monospace,monospace`; g.fillText('buy ▲ / sell ▼ flow', 3 * dpr, 9 * dpr);
     bars.forEach((v, i) => {
       const h = Math.min(1, Math.abs(v) / 2.5) * (mid - 1);
       g.fillStyle = v >= 0 ? 'rgba(45,255,122,.9)' : 'rgba(255,77,94,.9)';
@@ -619,15 +625,15 @@
 
     // 4 — gauge + pit posture on a real lean
     lean(1, 0.95, 120);
-    await run(38);
+    await run(46);
     await say({ step: 'Lesson 4 of 5', title: 'The lean call and the pit show the lean', focus: ['pLean', 'pScene'], pos: 'bot',
-      body: 'Behind the scenes, informed money <b>leans</b> the crowd one way for roughly 3 to 12 seconds, and the game reads the tape for you:<br>• the big <b>lean call</b> says <b>▲▲ BUYERS IN CONTROL</b>, <b>▼▼ SELLERS</b>, or <b>◆ CHOP</b> (more arrows = stronger),<br>• the <b>flow bars</b> on its right are net buying (green up) vs selling (red down) over the last seconds,<br>• the <b>pit crowd</b> flashes the same signal: <b>palms out = buying</b>, <b>palms in = selling</b>.<br>Better gear adds an <b>Intel ▲▼</b> hint. Tap the call to hide the coaching line.' });
+      body: 'Informed money <b>leans</b> the crowd one way for a few seconds. The game reads the tape for you:<br>• the big <b>lean call</b>: <b>▲▲ BUYERS</b>, <b>▼▼ SELLERS</b> or <b>◆ CHOP</b> (more arrows = stronger),<br>• the <b>flow bars</b>: net buying (green) vs selling (red),<br>• the <b>pit crowd</b>: palms out = buying, palms in = selling.<br>Tap the call to hide the coaching line.' });
 
     // 5 — quiz rounds
     await say({ step: 'Lesson 5 of 5', title: 'Now call it', body: 'Four quick rounds. Watch for a few seconds, then tell me what the pit is doing. The key: look for a <b>cluster</b> of big prints on one side, <b>confirmed</b> by the lean call and the ladder, not one loud print.', buttons: ['Start round 1 ▶'] });
     const opts = ['Leaning BUY', 'Leaning SELL', 'No lean: stand aside'];
     await quizRound(1, { title: 'Round 1', f: 1, s: 0.95, watch: 34, after: 22, options: opts, correct: 0,
-      intro: 'Watch the tape, gauge and ladder.', question: 'Which way is the pit leaning?', questionBody: 'Check the tape colors, the lean call and the flow bars.',
+      intro: 'Watch the tape, the lean call and the ladder.', question: 'Which way is the pit leaning?', questionBody: 'Check the tape colors, the lean call and the flow bars.',
       explain: '<span class="g">BUY</span>s clearly outweighing sells on the tape, the lean call and flow bars pointing up and the offers thinning out: a buy lean.',
       outcome: (d) => (d > 0 ? 'The lean carried price higher, as it usually does.' : 'It did not follow through this time. Flow is an edge, not a guarantee, so keep size small and use a stop.') });
     await quizRound(2, { title: 'Round 2', f: -1, s: 0.95, watch: 34, after: 22, options: opts, correct: 1,

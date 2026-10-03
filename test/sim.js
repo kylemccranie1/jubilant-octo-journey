@@ -147,27 +147,30 @@ function fresh(seed, sym = 'SOY') { const G = E.newGame(seed); G.unlocked[sym] =
 { const G = E.newGame(28); G.cash = 60000; G.ytd = 40000; let paid = false;
   for (let i = 0; i < 360 && !paid; i++) { E.skipDays(G, 1); if (G.flags.taxPaid) paid = true; }
   assert(paid && Math.abs(G.flags.taxPaid - 40000 * E.TAX_RATE) < 5000, 'tax'); }
-{ // front-running: the customer block really sweeps the book; trading ahead can profit
-  let ok = false, moved = 0;
-  for (let seed = 1; seed < 300 && !ok; seed++) {
+{ // front-running: the customer block really sweeps the book (median peak move over several offers); trading ahead leads to fine, then prison
+  const peaks = []; let didSec = false;
+  for (let seed = 1; seed < 400 && peaks.length < 10; seed++) {
     const G = E.newGame(seed); G.cash = 40000;
-    for (let d = 0; d < 80 && !G.over && !ok; d++) {
-      E.startSession(G, 'SOY'); const S = G.sess;
+    for (let d = 0; d < 80 && !G.over && peaks.length < 10; d++) {
+      E.startSession(G, 'SOY'); const S = G.sess; let got = false;
       while (G.sess && !G.sess.done) {
         const out = E.stepSession(G);
         if (out.some((e) => e.kind === 'offer')) {
           const o = S.offer, mid0 = (S.bid + S.ask) / 2; E.respondOffer(G, 'ahead'); assert(E.trade(G, o.side, 10).ok);
-          for (let i = 0; i < 40; i++) E.stepSession(G);
-          moved = ((S.bid + S.ask) / 2 - mid0) * o.side; ok = true; break;
+          let peak = -1e9; for (let i = 0; i < 40; i++) { E.stepSession(G); peak = Math.max(peak, ((S.bid + S.ask) / 2 - mid0) * o.side); }
+          peaks.push(peak); got = true; break;
         }
       }
-      if (ok) { if (G.pos) E.flatten(G); runToClose(G); assert(G.heat === 1);
+      if (got && !didSec) {
+        didSec = true; if (G.pos) E.flatten(G); runToClose(G); assert(G.heat === 1);
         G.sec = { at: G.day + 1, profit: 2000 }; E.skipDays(G, 2); assert(G.fined && !G.over, 'fined');
-        G.sec = { at: G.day + 1, profit: 2000 }; E.skipDays(G, 2); assert(G.over === 'prison', 'prison'); }
-      else if (G.sess) runToClose(G);
+        G.sec = { at: G.day + 1, profit: 2000 }; E.skipDays(G, 2); assert(G.over === 'prison', 'prison');
+      } else if (G.sess) runToClose(G);
+      if (got) break;
     }
   }
-  assert(ok && moved > 3, 'customer block moved the market ' + moved + ' ticks');
+  peaks.sort((x, y) => x - y); const med = peaks[peaks.length >> 1];
+  assert(peaks.length >= 8 && med >= 3, 'customer block moves the market: median peak ' + med + ' ticks over ' + peaks.length + ' offers');
 }
 { const G = fresh(31); E.stepSession(G); E.trade(G, 1, 1); assert(E.checkAchievements(G).some((a) => a.id === 'first')); }
 { // training floor hooks: no news/offers, scripted lean is followed, injected orders move the book

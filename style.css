@@ -207,3 +207,14 @@ button.big2{padding:10px 0;font-size:20px;min-height:54px}
 #pLean.chop #pLeanMain{color:var(--amber)}
 #pLean.strong{animation:leanpulse 1.2s ease-in-out infinite}@keyframes leanpulse{50%{filter:brightness(1.25)}}
 @media (max-height:700px){#pLean{min-height:46px}#pLeanMain{font-size:14px}#pLeanCoach{font-size:10px}}
+
+/* ---- lean strip: fits small phones, blunt exit warning */
+#pLean{min-height:46px;height:auto}
+#pLeanMain{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:15px}
+#pLeanCoach{font-size:10.5px;display:block}
+#pLeanCoach.bad{color:var(--down);font-weight:800;font-size:11px}
+@media (max-height:700px){#pLean{min-height:42px;padding:3px 8px}#pLeanMain{font-size:13px}#pLeanCoach{font-size:10px}}
+
+#pLean{flex:0 0 auto}
+.lean-l{justify-content:flex-start}
+@media (max-height:700px){#pChartWrap.crt{min-height:84px}}
