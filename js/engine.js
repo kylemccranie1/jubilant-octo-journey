@@ -29,15 +29,15 @@
   // anchors: approximate real price history; the game's price wanders around this path
   const A = (y, m, p) => [Date.UTC(y, m - 1, 1), p];
   const CONTRACTS = [
-    { sym: 'SOY', name: 'Soybeans', pit: 'CBOT Grain Pit', emoji: '🌱', tick: .25, tickVal: 12.5, vol: .011, margin: 1000, depth: 15, act: 0.88, bias: 1.25, unlock: 0,
+    { sym: 'SOY', name: 'Soybeans', pit: 'CBOT Grain Pit', emoji: '🌱', tick: .25, tickVal: 12.5, vol: .011, margin: 1000, depth: 15, act: 0.66, bias: 0.95, unlock: 0,
       anchors: [A(1990, 1, 570), A(1991, 1, 600), A(1993, 1, 580), A(1993, 8, 700), A(1994, 6, 660), A(1996, 6, 800), A(1997, 6, 830), A(1998, 6, 640), A(1999, 6, 480), A(2000, 6, 530), A(2000, 12, 520)] },
-    { sym: 'CRUDE', name: 'Crude Oil', pit: 'NYMEX Energy Pit', emoji: '🛢️', tick: .01, tickVal: 10, vol: .018, margin: 2000, depth: 12, act: 0.98, bias: 1.05, unlock: 12000,
+    { sym: 'CRUDE', name: 'Crude Oil', pit: 'NYMEX Energy Pit', emoji: '🛢️', tick: .01, tickVal: 10, vol: .018, margin: 2000, depth: 12, act: 0.92, bias: 0.7, unlock: 12000,
       anchors: [A(1990, 1, 21), A(1990, 7, 17), A(1990, 10, 37), A(1991, 2, 20), A(1992, 6, 21), A(1994, 6, 18), A(1996, 12, 25), A(1998, 12, 11), A(1999, 12, 25), A(2000, 9, 33), A(2000, 12, 26)] },
-    { sym: 'DM', name: 'Deutschmark', pit: 'CME Currency Pit', emoji: '💶', tick: .0001, tickVal: 12.5, vol: .006, margin: 2000, depth: 12, act: 0.94, bias: 1.1, unlock: 40000,
+    { sym: 'DM', name: 'Deutschmark', pit: 'CME Currency Pit', emoji: '💶', tick: .0001, tickVal: 12.5, vol: .006, margin: 2000, depth: 12, act: 0.88, bias: 0.7, unlock: 40000,
       anchors: [A(1990, 1, .60), A(1992, 9, .70), A(1993, 6, .62), A(1995, 4, .73), A(1997, 7, .54), A(1999, 1, .59), A(2000, 10, .43), A(2000, 12, .46)] },
-    { sym: 'BOND', name: 'T-Bonds', pit: 'CBOT Financial Pit', emoji: '📜', tick: 1 / 32, tickVal: 31.25, vol: .006, margin: 3000, depth: 10, act: 0.84, bias: 1.4, unlock: 150000,
+    { sym: 'BOND', name: 'T-Bonds', pit: 'CBOT Financial Pit', emoji: '📜', tick: 1 / 32, tickVal: 31.25, vol: .006, margin: 3000, depth: 10, act: 0.58, bias: 0.7, unlock: 150000,
       anchors: [A(1990, 1, 91), A(1991, 6, 97), A(1993, 10, 117), A(1994, 11, 98), A(1995, 12, 118), A(1996, 6, 108), A(1998, 10, 126), A(2000, 1, 98), A(2000, 12, 112)] },
-    { sym: 'SPX', name: 'S&P 500', pit: 'CME Index Pit', emoji: '📈', tick: .05, tickVal: 25, vol: .009, margin: 9000, depth: 8, act: 0.84, bias: 0.8, unlock: 600000,
+    { sym: 'SPX', name: 'S&P 500', pit: 'CME Index Pit', emoji: '📈', tick: .05, tickVal: 25, vol: .009, margin: 9000, depth: 8, act: 1.0, bias: 0.35, unlock: 600000,
       anchors: [A(1990, 1, 353), A(1990, 10, 295), A(1991, 6, 375), A(1992, 6, 410), A(1994, 6, 450), A(1995, 6, 540), A(1996, 6, 670), A(1997, 6, 880), A(1998, 6, 1130), A(1998, 10, 960), A(1999, 6, 1330), A(2000, 3, 1500), A(2000, 12, 1320)] },
   ];
   const CBY = {}; CONTRACTS.forEach((c) => { CBY[c.sym] = c; });
@@ -115,12 +115,12 @@
   ];
   // Floor gear: per-side clearing fee, how truthful the pit's shouting is (rel), and daily tips
   const TECH = [
-    { id: 0, name: 'Rotary Phone & WSJ', emoji: '☎️', price: 0, upkeep: 0, fee: 3.0, rel: .55, tips: 0, desc: 'Standard clearing fees ($3.00/side). Pit chatter only 55% reliable.' },
-    { id: 1, name: 'Motorola Brick Phone', emoji: '📱', price: 1500, upkeep: 50, fee: 2.4, rel: .62, tips: 1, desc: '$2.40/side. Chatter 62% reliable + 1 morning tip.' },
-    { id: 2, name: 'IBM PC + Prodigy Modem', emoji: '🖥️', price: 4500, upkeep: 80, fee: 1.8, rel: .68, tips: 1, desc: '$1.80/side. Chatter 68% reliable + 1 tip.' },
-    { id: 3, name: 'Quotron Terminal', emoji: '📟', price: 15000, upkeep: 250, fee: 1.2, rel: .74, tips: 2, desc: '$1.20/side. Chatter 74% reliable + 2 tips.' },
-    { id: 4, name: 'Bloomberg Desk (4 monitors)', emoji: '🖲️', price: 70000, upkeep: 900, fee: .8, rel: .82, tips: 2, desc: '$0.80/side. Chatter 82% reliable + 2 tips.' },
-    { id: 5, name: 'Private Trading Floor', emoji: '🏛️', price: 350000, upkeep: 5000, fee: .4, rel: .90, tips: 3, desc: '$0.40/side. Chatter 90% reliable + 3 tips.' },
+    { id: 0, name: 'Rotary Phone & WSJ', emoji: '☎️', price: 0, upkeep: 0, fee: 2.5, rel: .55, tips: 0, desc: 'Standard clearing fees ($2.50/side). Pit chatter only 55% reliable.' },
+    { id: 1, name: 'Motorola Brick Phone', emoji: '📱', price: 1500, upkeep: 50, fee: 2.0, rel: .62, tips: 1, desc: '$2.00/side. Chatter 62% reliable + 1 morning tip.' },
+    { id: 2, name: 'IBM PC + Prodigy Modem', emoji: '🖥️', price: 4500, upkeep: 80, fee: 1.5, rel: .68, tips: 1, desc: '$1.50/side. Chatter 68% reliable + 1 tip.' },
+    { id: 3, name: 'Quotron Terminal', emoji: '📟', price: 15000, upkeep: 250, fee: 1.0, rel: .74, tips: 2, desc: '$1.00/side. Chatter 74% reliable + 2 tips.' },
+    { id: 4, name: 'Bloomberg Desk (4 monitors)', emoji: '🖲️', price: 70000, upkeep: 900, fee: .7, rel: .82, tips: 2, desc: '$0.70/side. Chatter 82% reliable + 2 tips.' },
+    { id: 5, name: 'Private Trading Floor', emoji: '🏛️', price: 350000, upkeep: 5000, fee: .35, rel: .90, tips: 3, desc: '$0.35/side. Chatter 90% reliable + 3 tips.' },
   ];
 
   const LUX = [
@@ -242,7 +242,10 @@
   // resting limit orders sit in the queue and get filled as the crowd trades through them.
   const SIZE_F = [0.25, 0.5, 1, 2, 4], SIZE_W = [0.33, 0.30, 0.22, 0.10, 0.05];
   const SHOUT_RATE = 0.35;   // expected crowd orders per step
-  const REG_BIAS = 0.22;     // buy-probability tilt of an informed-flow regime
+  const REG_BIAS = 0.22;     // buy-probability tilt that an informed-flow regime leaks into ordinary crowd orders
+  const REG_LEAK = 0.35;     // ...scaled down: the real signal is the informed BLOCKS below
+  const INF_RATE = 0.085;    // informed block orders per step during a lean (x regime strength x pit bias)
+  const NOISE_W = [0.50, 0.37, 0.11, 0.02, 0];   // ordinary crowd order sizes (x SIZE_F): mostly small
   const MAX_PRINTS = 80;
   const RETAIL_RATE = 0.9;   // tiny uninformed orders per step: they chew queues (and fill resting orders) without moving price
 
@@ -445,6 +448,37 @@
     for (let i = S.prints.length - 1; i >= 0; i--) { const p = S.prints[i]; if (p[0] <= S.t - w) break; if (p[4] !== 'me' && p[4] !== 'mine') sum += p[1] * p[2]; }
     return sum;
   }
+  // The on-screen "lean call": computed ONLY from what the player can see (big crowd prints in the last ~25 steps)
+  const LEAN_WIN = 30, LEAN_T = [1.5, 3, 5], LEAN_PUR = 0.4, LEAN_MIN = 0.5; // window (steps), strength thresholds (x level depth), purity, min print size (x depth)
+  function leanSignal(G, win) {
+    const S = G.sess; win = win || LEAN_WIN;
+    const out = { dir: 0, strength: 0, net: 0, bb: 0, bs: 0, lb: 0, ls: 0 };
+    if (!S) return out;
+    const D = dpth(S);
+    for (let i = S.prints.length - 1; i >= 0; i--) {
+      const p = S.prints[i]; if (p[0] <= S.t - win) break;
+      if (p[4] === 'me' || p[4] === 'mine' || p[2] < D * LEAN_MIN) continue;
+      out.net += p[1] * p[2];
+      if (p[1] > 0) { out.bb++; out.lb += p[2]; } else { out.bs++; out.ls += p[2]; }
+    }
+    const a = Math.abs(out.net) / D, vol = out.lb + out.ls, purity = vol ? Math.abs(out.net) / vol : 0;
+    let st = a >= LEAN_T[2] ? 3 : a >= LEAN_T[1] ? 2 : a >= LEAN_T[0] ? 1 : 0;
+    if (purity < LEAN_PUR) st = 0; // mixed buying and selling is chop, not a lean
+    out.strength = st; out.dir = st ? Math.sign(out.net) : 0;
+    return out;
+  }
+  // order-flow "delta" bars: net aggressive lots per bucket of `size` steps, oldest first (in units of level depth)
+  function deltaBars(G, buckets, size) {
+    const S = G.sess, out = new Array(buckets).fill(0);
+    if (!S) return out;
+    const D = dpth(S);
+    for (const p of S.prints) {
+      if (p[4] === 'me' || p[4] === 'mine') continue;
+      const age = S.t - p[0], b = Math.floor(age / size);
+      if (b >= 0 && b < buckets) out[buckets - 1 - b] += p[1] * p[2] / D;
+    }
+    return out;
+  }
   const flowGauge = (G) => (G.sess ? clamp(G.sess.flowEma * 5, -1, 1) : 0);
   const shoutsNow = (G, n) => { const S = G.sess; return S ? S.prints.slice(-n).reverse() : []; };
   function ladder(G, k) {
@@ -482,16 +516,24 @@
     const fund = S.open + (S.target - S.totJ - S.open) * (t / S.n) + S.fundJ;
     const gain = 0.22 + 1.6 * (t / S.n) * (t / S.n) + (S.burst ? 0.9 * S.burst.left / S.burst.max : 0);
     const pull = S.training ? 0 : clamp(gain * (fund - midOf(S)) / S.sigT, -0.3, 0.3); // training floor: the scripted lean is the only force
-    let p = 0.5 + REG_BIAS * (c.bias || 1) * S.regime.f * S.regime.s + pull;
+    let p = 0.5 + REG_BIAS * REG_LEAK * (c.bias || 1) * S.regime.f * S.regime.s + pull;
     if (S.burst) p += 0.5 * S.burst.tilt * S.burst.dir * burstFrac * clamp(Math.abs(fund - midOf(S)) / (0.5 * S.sigT), 0.25, 1);
     if (S.rev && S.rev.age >= 2) p += S.rev.dir * S.rev.str * (S.rev.left / 34);
     if (S.react) p += S.react.dir * S.react.str * (S.react.left / 6);
     p = clamp(p, 0.06, 0.94);
     const side = rnd(G) < p ? 1 : -1;
-    let u = rnd(G), k = 0; while (k < SIZE_W.length - 1 && u > SIZE_W[k]) { u -= SIZE_W[k]; k++; }
+    let u = rnd(G), k = 0; while (k < NOISE_W.length - 1 && u > NOISE_W[k]) { u -= NOISE_W[k]; k++; }
     const lots = Math.max(1, Math.round(dpth(S) * c.act * SIZE_F[k] * (1 + 1.5 * burstFrac * (S.burst ? S.burst.size : 1))));
     const r = sweep(G, S, side, lots, 'pit');
     S.imb += side * r.filled / dpth(S);
+  }
+
+  // informed money: during a lean, bigger one-sided blocks show up on the tape (this is what the player is learning to spot)
+  function informedOrder(G, S) {
+    const c = CBY[S.sym], f = S.regime.f;
+    if (!f || rnd(G) >= INF_RATE * (c.bias || 1) * S.regime.s) return;
+    const lots = Math.max(1, Math.round(dpth(S) * c.act * (1 + 2 * rnd(G))));
+    const r = sweep(G, S, f, lots, 'pit'); S.imb += f * r.filled / dpth(S);
   }
 
   function stepSession(G) {
@@ -519,6 +561,7 @@
     let n = rnd(G) < SHOUT_RATE * mult ? 1 : 0;
     if (mult > 1.5 && rnd(G) < SHOUT_RATE * (mult - 1)) n++;
     for (let i = 0; i < n; i++) crowdOrder(G, S, burstFrac);
+    informedOrder(G, S);
     for (let r = RETAIL_RATE; r > 0; r -= 1) {
       if (rnd(G) < Math.min(1, r)) sweep(G, S, rnd(G) < 0.5 ? 1 : -1, Math.max(1, Math.round(dpth(S) * 0.09 * (0.5 + rnd(G)))), 'retail');
     }
@@ -920,7 +963,7 @@
 
   const api = {
     START_CASH, SELL_RATIO, SAVE_VERSION, TAX_RATE, MAINT, N_STEPS, STEP_MS, CONTRACTS, CBY, HOMES, CARS, TECH, LUX, RANKS, ACH, ERA_EVENTS,
-    newGame, startSession, stepSession, CAREER, RIVALS, marginOf, feeOf, liqPrice, rankings, inflation, trade, flatten, setStop, placeLimit, cancelOrders, preview, forceRegime, inject, respondOffer, skipDays, recentFlow, flowGauge, shoutsNow, ladder, quote,
+    newGame, startSession, stepSession, CAREER, RIVALS, marginOf, feeOf, liqPrice, rankings, inflation, trade, flatten, setStop, placeLimit, cancelOrders, preview, forceRegime, inject, respondOffer, skipDays, recentFlow, flowGauge, leanSignal, deltaBars, shoutsNow, ladder, quote,
     buyItem, sellItem, moveHome, checkAchievements,
     netWorth, equity, unreal, maxLots, marginUsed, marginLevel, markT, monthlyCosts, monthlyIncome, rankOf, livingCost,
     dateOfDay, clockOf, fmtPrice, priceOf,

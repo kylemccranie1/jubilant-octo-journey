@@ -105,7 +105,7 @@
     html += `<div class="card tip-card row tap" data-train="1"><div class="grow" style="font-size:13px">🎓 <b>Training Floor</b>: a 2-minute interactive lesson on reading order flow.</div><span>›</span></div>`;
     html += `<h2>Between sessions</h2><div class="chips"><button data-skip="1">Skip day</button><button data-skip="5">Skip week</button><button data-skip="21">Skip month</button></div>
       <div class="dim" style="font-size:11px;margin-top:6px">Skipping lets the market move without you (positions are marked to market daily; margin calls still apply). Bills still come due.</div>`;
-    html += `<div class="card" style="margin-top:12px;font-size:12px;color:var(--dim)"><b>How the pit works:</b> every shout is a real order eating the book — watch the ladder and the tape. Big BUYs lift the offer and push price up; the crowd's lean (the pit's hand signals and the flow gauge) tells you which way the informed money is going. <b>BUY</b>/<b>SELL</b> cross the spread and walk the book, so big orders slip and move price (then partly revert). <b>Join BID/OFFER</b> rests an order in the queue: great for taking profit into strength, dangerous for quoting both sides — you mostly get filled when the market is running over you. Use a stop. Size small until you've earned it.</div>`;
+    html += `<div class="card" style="margin-top:12px;font-size:12px;color:var(--dim)"><b>How the pit works:</b> every shout is a real order eating the book — watch the ladder and the tape. Big BUYs lift the offer and push price up; the crowd's lean (the big lean call, the flow bars and the pit's hand signals) tells you which way the informed money is going. <b>BUY</b>/<b>SELL</b> cross the spread and walk the book, so big orders slip and move price (then partly revert). <b>Join BID/OFFER</b> rests an order in the queue: great for taking profit into strength, dangerous for quoting both sides — you mostly get filled when the market is running over you. Use a stop. Size small until you've earned it.</div>`;
     return html;
   }
 
@@ -287,7 +287,7 @@
   }
 
   function enterLive(resumePaused) {
-    live = { timer: null, speed: 1, paused: false, qty: 1, stopIdx: 0, lastSave: 0, bannerTimer: null, modalOpen: false, lastShout: -1 };
+    live = { timer: null, speed: (G.level || 0) === 0 ? 0.75 : 1, coachOff: false, paused: false, qty: 1, stopIdx: 0, lastSave: 0, bannerTimer: null, modalOpen: false, lastShout: -1 };
     if (G.sess.stop) live.stopIdx = Math.max(0, STOPS.indexOf(G.sess.stop));
     $('pit').classList.remove('hidden'); document.body.classList.add('live');
     if (titleScene) titleScene.stop();
@@ -296,6 +296,7 @@
     live.seq = G.sess.pseq || 0; live.act = 0;
     if (window.Sfx) { window.Sfx.roarStart(); }
     $('pName').textContent = `${E.CBY[G.sess.sym].emoji} ${E.CBY[G.sess.sym].name}`;
+    $('pSpeed').textContent = live.speed + '×';
     buildQty(); sizeCanvas(); updateLive();
     save();
     if (resumePaused) setPaused(true); else startTimer();
@@ -395,6 +396,36 @@
     c.width = Math.max(1, r.width * dpr); c.height = Math.max(1, r.height * dpr);
   }
 
+  // the big, plain-English read of the tape (plus order-flow bars and a one-line coach)
+  function drawLean(S) {
+    const L = E.leanSignal(G), p = G.pos, c = E.CBY[S.sym];
+    const el = $('pLean'), arrows = L.dir > 0 ? '▲'.repeat(L.strength) : '▼'.repeat(L.strength);
+    let main, coach;
+    if (L.strength === 0) { main = '◆ CHOP'; coach = 'No clear lean. Stand aside.'; }
+    else if (L.strength === 1) { main = `${arrows} ${L.dir > 0 ? 'BUY' : 'SELL'} LEAN FORMING`; coach = 'Wait for one more big print on the same side.'; }
+    else { main = `${arrows} ${L.dir > 0 ? 'BUYERS' : 'SELLERS'} IN CONTROL`; coach = `${L.bb} big buys (${L.lb} lots) vs ${L.bs} big sells (${L.ls} lots).`; }
+    if (!(live && live.coachOff)) {
+      if (p) {
+        const withIt = L.dir === Math.sign(p.qty);
+        coach = L.strength === 0 ? 'Flow has faded. Take profit or tighten up.' : (withIt ? 'Flow is WITH you. Hold, or take profit with a limit order.' : 'Flow turned AGAINST you. Consider exiting.');
+      } else if (L.strength >= 2) coach += ` ${L.dir > 0 ? 'Buy' : 'Sell'} 1–2 lots, exit when it flips.`;
+    } else coach = '';
+    if (G.tech >= 1) main += `  · Intel ${S.hint > 0 ? '▲' : S.hint < 0 ? '▼' : '–'}`;
+    $('pLeanMain').textContent = main; $('pLeanCoach').textContent = coach;
+    el.className = 'lean ' + (L.strength === 0 ? 'chop' : (L.dir > 0 ? 'up' : 'down')) + (L.strength >= 2 ? ' strong' : '');
+    // order-flow bars: net aggressive buying/selling over the last ~12 seconds
+    const cv = $('pDelta'), r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    if (cv.width !== Math.round(r.width * dpr)) { cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr); }
+    const g = cv.getContext('2d'), W = cv.width, H = cv.height, n = 30, bars = E.deltaBars(G, n, 3), bw = W / n, mid = H / 2;
+    g.clearRect(0, 0, W, H);
+    g.strokeStyle = 'rgba(255,255,255,.25)'; g.lineWidth = 1; g.beginPath(); g.moveTo(0, mid); g.lineTo(W, mid); g.stroke();
+    bars.forEach((v, i) => {
+      const h = Math.min(1, Math.abs(v) / 2.5) * (mid - 1);
+      g.fillStyle = v >= 0 ? 'rgba(45,255,122,.9)' : 'rgba(255,77,94,.9)';
+      if (v >= 0) g.fillRect(i * bw + 1, mid - h, bw - 2, h); else g.fillRect(i * bw + 1, mid, bw - 2, h);
+    });
+  }
+
   // split-flap style price board: each changed character flips
   function flapPrice(str) {
     const el = $('pLast'); if (el.dataset.v === str) return;
@@ -427,9 +458,7 @@
     const row = (r, k) => `<div class="lv ${k} ${(live.hitUntil[r.p] || 0) > now ? 'hit' : ''}"><span class="lp">${fp(sym, r.p)}</span><span class="lbar"><i style="width:${Math.min(100, r.size / mx * 100)}%"></i></span><span class="ls">${r.size}${r.mine ? `<b> +${r.mine}</b>` : ''}</span></div>`;
     $('pLadder').innerHTML = L.asks.map((r) => row(r, 'a')).join('') + L.bids.map((r) => row(r, 'b')).join('');
     // flow gauge + floor intel
-    const norm = E.flowGauge(G);
-    $('pGaugeFill').style.cssText = norm >= 0 ? `left:50%;width:${norm * 50}%;background:var(--up)` : `left:${50 + norm * 50}%;width:${-norm * 50}%;background:var(--down)`;
-    $('pHint').textContent = G.tech >= 1 ? 'Intel ' + (S.hint > 0 ? '▲' : S.hint < 0 ? '▼' : '–') : '';
+    drawLean(S);
     // shouts
     const sh = E.shoutsNow(G, 40).filter((s) => s[2] >= Math.max(2, D * 0.5) || s[4] === 'me' || s[4] === 'mine' || s[4] === 'block').slice(0, 6);
     $('pShouts').innerHTML = sh.map((s) => { const mine = s[4] === 'me' || s[4] === 'mine'; return `<div class="sh ${s[1] > 0 ? 'b' : 's'} ${s[2] >= D * 2 ? 'bigsh' : ''} ${mine ? 'mine' : ''}">${mine ? '★ ' : ''}${s[4] === 'block' ? 'PAPER ' : ''}${s[1] > 0 ? 'BUY' : 'SELL'} ${s[2]} <small>${fp(sym, Math.round(s[3]))}</small></div>`; }).join('') || '<div class="sh dim">…quiet…</div>';
@@ -557,13 +586,13 @@
     lean(o.f, o.s, 120);
     await run(o.watch, o.perStep);
     const before = bigFlow(28);
-    const pick = await say({ step: label, title: o.question, body: o.questionBody, focus: ['pShouts', 'pGauge', 'pLadder'], dim: false, buttons: o.options, pos: 'top' });
+    const pick = await say({ step: label, title: o.question, body: o.questionBody, focus: ['pShouts', 'pLean', 'pLadder'], dim: false, buttons: o.options, pos: 'top' });
     const right = pick === o.correct;
     const m0 = midNow();
     await run(o.after);
     const d = midNow() - m0;
     const tape = `In the last few seconds the tape showed <span class="g">${before.bb} big BUYs (${before.lb} lots)</span> vs <span class="r">${before.bs} big SELLs (${before.ls} lots)</span>.`;
-    await say({ step: label, title: right ? '✅ Good read' : '❌ Not quite', focus: ['pShouts', 'pGauge'], dim: false, pos: 'top',
+    await say({ step: label, title: right ? '✅ Good read' : '❌ Not quite', focus: ['pShouts', 'pLean'], dim: false, pos: 'top',
       body: `${o.explain}<div class="res">${tape}<br>Price over the next few seconds: <b>${fmtTicks(d)}</b>. ${o.outcome(d)}</div>`, buttons: [n < 4 ? 'Next round ▶' : 'Continue ▶'] });
   }
 
@@ -591,23 +620,23 @@
     // 4 — gauge + pit posture on a real lean
     lean(1, 0.95, 120);
     await run(38);
-    await say({ step: 'Lesson 4 of 5', title: 'The gauge and the pit show the lean', focus: ['pGauge', 'pScene'], pos: 'bot',
-      body: 'Behind the scenes, informed money <b>leans</b> the crowd one way for roughly 3 to 12 seconds. You can feel it:<br>• the <b>flow gauge</b> leans toward BUY or SELL (it smooths the last few seconds, so it confirms more than it predicts),<br>• the <b>pit crowd</b> mostly flashes the same hand signal: <b>palms out = buying</b>, <b>palms in = selling</b>,<br>• and the tape fills with one color.<br>Better gear adds an <b>Intel ▲▼</b> hint.' });
+    await say({ step: 'Lesson 4 of 5', title: 'The lean call and the pit show the lean', focus: ['pLean', 'pScene'], pos: 'bot',
+      body: 'Behind the scenes, informed money <b>leans</b> the crowd one way for roughly 3 to 12 seconds, and the game reads the tape for you:<br>• the big <b>lean call</b> says <b>▲▲ BUYERS IN CONTROL</b>, <b>▼▼ SELLERS</b>, or <b>◆ CHOP</b> (more arrows = stronger),<br>• the <b>flow bars</b> on its right are net buying (green up) vs selling (red down) over the last seconds,<br>• the <b>pit crowd</b> flashes the same signal: <b>palms out = buying</b>, <b>palms in = selling</b>.<br>Better gear adds an <b>Intel ▲▼</b> hint. Tap the call to hide the coaching line.' });
 
     // 5 — quiz rounds
-    await say({ step: 'Lesson 5 of 5', title: 'Now call it', body: 'Four quick rounds. Watch for a few seconds, then tell me what the pit is doing. The key: look for a <b>cluster</b> of big prints on one side, <b>confirmed</b> by the gauge and the ladder, not one loud print.', buttons: ['Start round 1 ▶'] });
+    await say({ step: 'Lesson 5 of 5', title: 'Now call it', body: 'Four quick rounds. Watch for a few seconds, then tell me what the pit is doing. The key: look for a <b>cluster</b> of big prints on one side, <b>confirmed</b> by the lean call and the ladder, not one loud print.', buttons: ['Start round 1 ▶'] });
     const opts = ['Leaning BUY', 'Leaning SELL', 'No lean: stand aside'];
     await quizRound(1, { title: 'Round 1', f: 1, s: 0.95, watch: 34, after: 22, options: opts, correct: 0,
-      intro: 'Watch the tape, gauge and ladder.', question: 'Which way is the pit leaning?', questionBody: 'Check the tape colors, the gauge and the ladder.',
-      explain: '<span class="g">BUY</span>s clearly outweighing sells on the tape, the gauge leaning right and the offers thinning out: a buy lean.',
+      intro: 'Watch the tape, gauge and ladder.', question: 'Which way is the pit leaning?', questionBody: 'Check the tape colors, the lean call and the flow bars.',
+      explain: '<span class="g">BUY</span>s clearly outweighing sells on the tape, the lean call and flow bars pointing up and the offers thinning out: a buy lean.',
       outcome: (d) => (d > 0 ? 'The lean carried price higher, as it usually does.' : 'It did not follow through this time. Flow is an edge, not a guarantee, so keep size small and use a stop.') });
     await quizRound(2, { title: 'Round 2', f: -1, s: 0.95, watch: 34, after: 22, options: opts, correct: 1,
       intro: 'A different lean this time.', question: 'Which way is the pit leaning?', questionBody: 'Same drill.',
-      explain: '<span class="r">SELL</span>s clearly outweighing buys on the tape, the gauge leaning left and the bids getting eaten: a sell lean.',
+      explain: '<span class="r">SELL</span>s clearly outweighing buys on the tape, the lean call and flow bars pointing down and the bids getting eaten: a sell lean.',
       outcome: (d) => (d < 0 ? 'Price sank with the selling.' : 'No follow-through this time. That is why you use a stop.') });
     await quizRound(3, { title: 'Round 3', f: 0, s: 0, watch: 30, after: 18, options: opts, correct: 2, perStep: null,
-      intro: 'Careful, this one is a trap for impatient traders.', question: 'Is there a lean?', questionBody: 'Look for alternating colors and a gauge that stays near the middle.',
-      explain: 'Buys and sells alternating, the gauge hovering near the middle: <b>no lean</b>. Trading chop just pays the spread and fees. <b>Standing aside is a position.</b>',
+      intro: 'Careful, this one is a trap for impatient traders.', question: 'Is there a lean?', questionBody: 'Look for alternating colors and flow bars that stay near the middle.',
+      explain: 'Buys and sells alternating, the call saying CHOP: <b>no lean</b>. Trading chop just pays the spread and fees. <b>Standing aside is a position.</b>',
       outcome: (d) => (Math.abs(d) < 3 ? 'Price went nowhere. A trade here would just have cost you the spread.' : 'Price drifted a bit, but with no cluster there was no reason to trade it.') });
     await quizRound(4, { title: 'Round 4: the trap', f: 1, s: 0.95, watch: 24, after: 18, options: ['Fade it: SELL', 'Stay with the lean: BUY', 'Stand aside'], correct: 1,
       perStep: (i) => { if (i === 23) E.inject(G, -1, D * 4); },
@@ -635,7 +664,7 @@
 
     // wrap-up
     await say({ step: 'Done', title: '🎓 Your order-flow checklist', pos: 'top',
-      body: '1. <b>Cluster, not a print.</b> 2–3 big prints on one side (about 3× the usual level size in ~4 seconds).<br>2. <b>Confirm</b> with the gauge, the thinning ladder and the pit\'s hand signals.<br>3. <b>Don\'t fade</b> a single big print. Big prints carry momentum.<br>4. <b>Chop = no trade.</b> Alternating colors, flat gauge.<br>5. <b>Mind the costs</b> (about 1.5 ticks round trip). Small size, always a stop.<br>6. <b>Exit when the flow turns</b>, or take profit with a limit order while it is still with you.<br>7. <b>Trade headlines</b> right away.<br><br><i>These drills are cleaner than a real session: the edge is real but modest, so be selective.</i>', buttons: ['Finish training ✔'] });
+      body: '1. <b>Cluster, not a print.</b> 2–3 big prints on one side (about 3× the usual level size in ~4 seconds).<br>2. <b>Confirm</b> with the lean call, the flow bars, the thinning ladder and the pit\'s hand signals.<br>3. <b>Don\'t fade</b> a single big print. Big prints carry momentum.<br>4. <b>Chop = no trade.</b> Alternating colors, CHOP call.<br>5. <b>Mind the costs</b> (about 1.5 ticks round trip). Small size, always a stop.<br>6. <b>Exit when the flow turns</b>, or take profit with a limit order while it is still with you.<br>7. <b>Trade headlines</b> right away.<br><br><i>These drills are cleaner than a real session: the edge is real but modest, so be selective.</i>', buttons: ['Finish training ✔'] });
   }
 
   async function startTraining() {
@@ -726,7 +755,8 @@
   $('pPause').addEventListener('click', () => setPaused(!live.paused));
   $('pResume').addEventListener('click', () => setPaused(false));
   $('pLeave').addEventListener('click', () => { stopTimer(); save(); if (scene) scene.stop(); if (window.Sfx) window.Sfx.roarStop(); document.body.classList.remove('live'); $('pit').classList.add('hidden'); live = null; $('app').classList.add('hidden'); $('title').classList.remove('hidden'); $('btnContinue').classList.remove('hidden'); });
-  $('pSpeed').addEventListener('click', () => { live.speed = live.speed === 1 ? 2 : 1; $('pSpeed').textContent = live.speed + '×'; if (!live.paused && !live.modalOpen) startTimer(); });
+  $('pSpeed').addEventListener('click', () => { const SP = [0.5, 0.75, 1, 2]; live.speed = SP[(SP.indexOf(live.speed) + 1) % SP.length]; $('pSpeed').textContent = live.speed + '×'; if (!live.paused && !live.modalOpen) startTimer(); });
+  $('pLean').addEventListener('click', () => { if (live) { live.coachOff = !live.coachOff; updateLive(); } });
   $('btnBell').addEventListener('click', openBell);
   $('btnNew').addEventListener('click', newGame);
   $('btnContinue').addEventListener('click', cont);

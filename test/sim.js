@@ -96,7 +96,7 @@ function fresh(seed, sym = 'SOY') { const G = E.newGame(seed); G.unlocked[sym] =
   const G = fresh(22), S = G.sess; for (let i = 0; i < 5; i++) E.stepSession(G);
   const before = G.cash, a = E.trade(G, 1, 1), b = E.trade(G, -1, 1);
   assert(a.ok && b.ok && !G.pos);
-  assert(Math.abs((G.cash - before) - ((b.px - a.px) * 12.5 - 2 * 3.0)) < 1e-6, 'pnl = ticks*val - fees');
+  assert(Math.abs((G.cash - before) - ((b.px - a.px) * 12.5 - 2 * E.TECH[0].fee)) < 1e-6, 'pnl = ticks*val - fees');
   assert(!E.trade(G, 1, 50).ok, 'margin limit blocks oversize');
 }
 { // crowd prints move the price in their direction on average
