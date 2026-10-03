@@ -168,3 +168,18 @@ button.big2{padding:10px 0;font-size:20px;min-height:54px}
 #pLast.fup .flap{color:var(--up)}#pLast.fdown .flap{color:var(--down)}
 @media (max-height:700px){#pScene{height:62px}#pLast{font-size:28px}}
 .title-card .logo{text-shadow:0 0 18px var(--cyan),3px 3px 0 var(--pink),0 0 40px rgba(255,79,216,.3)}
+
+/* ---- training floor ---- */
+#tutDim{position:absolute;inset:0;background:rgba(2,4,10,.66);z-index:23;pointer-events:none}
+#tutCard{position:absolute;left:10px;right:10px;z-index:30;background:var(--panel);border:2px solid var(--amber);border-radius:14px;padding:11px 12px;box-shadow:0 10px 34px rgba(0,0,0,.7);max-height:62%;overflow-y:auto}
+#tutCard.top{top:calc(8px + var(--sat))}#tutCard.bot{bottom:calc(10px + var(--sab))}
+.tut-head{display:flex;justify-content:space-between;align-items:center;font:11px var(--mono);color:var(--amber)}
+.tut-head button{background:none;border:0;padding:4px 6px;font-size:11px;color:var(--dim);min-height:0}
+#tutCard h4{margin:4px 0 4px;font-size:16px}
+#tutBody{font-size:13px;line-height:1.45;color:var(--text)}
+#tutBody b{color:var(--cyan)}#tutBody .g{color:var(--up);font-weight:700}#tutBody .r{color:var(--down);font-weight:700}
+#tutBody .res{margin-top:6px;padding:6px 8px;border-radius:8px;background:var(--panel2);font-size:12px}
+#tutBtns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}#tutBtns button{flex:1;min-height:44px;font-size:14px}
+.tut-focus{z-index:24!important;box-shadow:0 0 0 2px var(--amber),0 0 24px rgba(255,184,0,.6)!important;border-radius:10px;animation:tutpulse 1.4s ease-in-out infinite}
+@keyframes tutpulse{50%{box-shadow:0 0 0 3px var(--amber),0 0 34px rgba(255,184,0,.85)}}
+#pit>.tut-focus,.pit-ctl .tut-focus,#pit .two.tut-focus{position:relative}

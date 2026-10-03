@@ -170,4 +170,19 @@ function fresh(seed, sym = 'SOY') { const G = E.newGame(seed); G.unlocked[sym] =
   assert(ok && moved > 3, 'customer block moved the market ' + moved + ' ticks');
 }
 { const G = fresh(31); E.stepSession(G); E.trade(G, 1, 1); assert(E.checkAchievements(G).some((a) => a.id === 'first')); }
+{ // training floor hooks: no news/offers, scripted lean is followed, injected orders move the book
+  const D = E.CBY.SOY.depth;
+  const G0 = E.newGame(5); G0.unlocked.SOY = true; G0.cash = 60000; E.startSession(G0, 'SOY', { training: true });
+  assert(G0.sess.training && G0.sess.events.length === 0 && !G0.sess.offer, 'training session is clean');
+  const ask0 = G0.sess.ask, front = E.ladder(G0, 1).asks[0].size;
+  E.inject(G0, 1, front + 5); assert(G0.sess.ask > ask0, 'injected buy clears the offer and steps price');
+  let up = 0; const N = 80;
+  for (let sd = 0; sd < N; sd++) {
+    const G = E.newGame(900 + sd); G.unlocked.SOY = true; E.startSession(G, 'SOY', { training: true }); const S = G.sess;
+    E.forceRegime(G, 1, 0.95, 120); for (let i = 0; i < 34; i++) E.stepSession(G);
+    const m0 = (S.bid + S.ask) / 2; for (let i = 0; i < 22; i++) E.stepSession(G);
+    if ((S.bid + S.ask) / 2 > m0) up++;
+  }
+  assert(up / N > 0.7, 'scripted buy lean carries price up ' + up + '/' + N);
+}
 console.log('OK');

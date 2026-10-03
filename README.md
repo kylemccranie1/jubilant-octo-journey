@@ -29,6 +29,10 @@ On Android Chrome open the URL and choose **⋮ → Add to Home screen**.
 - **Life layer:** homes, cars, floor gear and status symbols; monthly bills out of your trading account; 28% tax each April; repo man → eviction → **homeless**.
 - **Achievements:** 25 trophies that persist across games. Saves automatically (including mid-session).
 
+## Training Floor
+
+An interactive 2-minute lesson on reading order flow (title screen, the Pit tab, or offered on your first game). It runs on the real engine with fake money: tape, ladder, chart and gauge walkthroughs with spotlights, four "call the lean" quiz rounds (including the don't-fade-one-print trap and a no-lean round), a costs lesson, a live practice trade, and a checklist. Finishing earns the *Floor Trained* trophy.
+
 ## The look
 
 A 90s trading floor, drawn in code (no image files):
