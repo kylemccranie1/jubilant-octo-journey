@@ -140,7 +140,7 @@ function fresh(seed, sym = 'SOY') { const G = E.newGame(seed); G.unlocked[sym] =
   assert(!E.startSession(G, 'CRUDE').ok, 'cannot switch pit while holding');
   E.skipDays(G, 5); assert(G.pos.entry === G.mk.SOY.close, 'settles through skipped days');
 }
-{ const G = E.newGame(26); G.cash = 20000; const evs = E.skipDays(G, 1); assert(G.unlocked.CRUDE && evs.some((e) => e.kind === 'unlock'), 'unlock'); }
+{ const G = E.newGame(26); G.cash = 20000; const evs = E.skipDays(G, 1); assert(G.unlocked.CRUDE && G.level === 1 && evs.some((e) => e.kind === 'promote'), 'promotion unlocks the pit'); assert(E.marginOf(G, 'SOY') < E.CBY.SOY.margin, 'promotion improves margin terms'); assert(E.monthlyCosts(G) > 450, 'dues added'); }
 { const G = E.newGame(27); G.cash = 2e6; assert(E.buyItem(G, 'home', 4).ok && E.buyItem(G, 'car', 4).ok); G.cash = 1000;
   const evs = []; for (let i = 0; i < 60 && !G.over; i++) evs.push(...E.skipDays(G, 21));
   assert(evs.some((e) => e.kind === 'repo') && G.over === 'homeless', 'repo→homeless'); }
@@ -184,5 +184,35 @@ function fresh(seed, sym = 'SOY') { const G = E.newGame(seed); G.unlocked[sym] =
     if ((S.bid + S.ask) / 2 > m0) up++;
   }
   assert(up / N > 0.7, 'scripted buy lean carries price up ' + up + '/' + N);
+}
+{ // demotion: net worth sags below 60% of the badge threshold for a month -> badge pulled
+  const G = E.newGame(40); G.cash = 40000; E.skipDays(G, 1); assert(G.level === 2, 'seat holder'); G.cash = 8000;
+  let evs = []; for (let i = 0; i < 30; i++) evs.push(...E.skipDays(G, 1));
+  assert(evs.some((e) => e.kind === 'demote') && G.level < 2 && !G.unlocked.DM, 'demoted and locked out of DM');
+}
+{ // final notice: cannot cover the month -> countdown; paying in time clears it, missing it triggers the collectors
+  const mk = () => { const G = E.newGame(41); G.home = 1; G.cash = 2e6; E.buyItem(G, 'car', 3); G.cash = 300; return G; };
+  const G1 = mk(); let evs = []; for (let i = 0; i < 40 && !G1.notice; i++) evs.push(...E.skipDays(G1, 1));
+  assert(G1.notice && evs.some((e) => e.kind === 'notice'), 'notice issued'); const need = G1.notice.need;
+  G1.cash = need + 50; const e2 = E.skipDays(G1, 1);
+  assert(!G1.notice && e2.some((e) => e.kind === 'noticeOk') && G1.car === 3, 'paid in time keeps the car');
+  const G2 = mk(); for (let i = 0; i < 40 && !G2.notice; i++) E.skipDays(G2, 1);
+  const e3 = []; for (let i = 0; i < 8 && G2.notice; i++) e3.push(...E.skipDays(G2, 1));
+  assert(!G2.notice && (e3.some((e) => e.kind === 'repo') || G2.over === 'homeless'), 'missed notice -> repo or street');
+}
+{ // margin warning, liquidation price and liquidation fee
+  const G = fresh(42); G.cash = 12000; E.stepSession(G); const S = G.sess; assert(E.trade(G, 1, 10).ok);
+  const lp = E.liqPrice(G); assert(lp < G.pos.entry, 'liq price below a long entry');
+  const cashBefore = G.cash; S.bid = Math.ceil(lp) + 4; S.ask = S.bid + 1; S.bids = {}; S.asks = {};
+  const warn = E.stepSession(G); assert(warn.some((e) => e.kind === 'marginwarn') || !G.pos, 'warned before liquidation');
+  S.bid = Math.floor(lp) - 6; S.ask = S.bid + 1;
+  const evs = []; for (let i = 0; i < 3; i++) evs.push(...E.stepSession(G));
+  assert(evs.some((e) => e.kind === 'margin') && !G.pos && G.stats.fees >= 250, 'liquidation fee charged');
+}
+{ // rivals and year-end review
+  const G = E.newGame(43); assert(E.rankings(G).length === 7);
+  let rev = null, n = 0; for (let i = 0; i < 300 && !rev; i++) { for (const e of E.skipDays(G, 1)) if (e.kind === 'review') rev = e.review; n++; if (G.over) break; }
+  assert(rev && rev.year === 1990 && rev.of === 7, 'year-end review');
+  for (const r of E.rankings(G)) assert(Number.isFinite(r.nw) && r.nw > 0);
 }
 console.log('OK');

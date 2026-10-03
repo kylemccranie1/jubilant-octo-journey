@@ -10,7 +10,9 @@
   const MAINT = 0.75;          // maintenance margin = 75% of initial
   const N_STEPS = 520;         // price ticks per trading session
   const STEP_MS = 150;         // real-time ms per step (UI pacing)
-  const SAVE_VERSION = 3;
+  const SAVE_VERSION = 4;
+  const LIQ_PENALTY = 25;      // clearing-firm fee per lot when it liquidates you
+  const NOTICE_DAYS = 5;       // trading days to cover an unpaid month before the repo man collects
   const K_FLOW = 0.22;         // strength of order-flow drift (in session-sigma units per step)
 
   // ---------------------------------------------------------------- calendar (weekdays only)
@@ -31,11 +33,11 @@
       anchors: [A(1990, 1, 570), A(1991, 1, 600), A(1993, 1, 580), A(1993, 8, 700), A(1994, 6, 660), A(1996, 6, 800), A(1997, 6, 830), A(1998, 6, 640), A(1999, 6, 480), A(2000, 6, 530), A(2000, 12, 520)] },
     { sym: 'CRUDE', name: 'Crude Oil', pit: 'NYMEX Energy Pit', emoji: '🛢️', tick: .01, tickVal: 10, vol: .018, margin: 2000, depth: 12, act: 0.98, bias: 1.05, unlock: 12000,
       anchors: [A(1990, 1, 21), A(1990, 7, 17), A(1990, 10, 37), A(1991, 2, 20), A(1992, 6, 21), A(1994, 6, 18), A(1996, 12, 25), A(1998, 12, 11), A(1999, 12, 25), A(2000, 9, 33), A(2000, 12, 26)] },
-    { sym: 'DM', name: 'Deutschmark', pit: 'CME Currency Pit', emoji: '💶', tick: .0001, tickVal: 12.5, vol: .006, margin: 2000, depth: 12, act: 0.94, bias: 1.1, unlock: 30000,
+    { sym: 'DM', name: 'Deutschmark', pit: 'CME Currency Pit', emoji: '💶', tick: .0001, tickVal: 12.5, vol: .006, margin: 2000, depth: 12, act: 0.94, bias: 1.1, unlock: 40000,
       anchors: [A(1990, 1, .60), A(1992, 9, .70), A(1993, 6, .62), A(1995, 4, .73), A(1997, 7, .54), A(1999, 1, .59), A(2000, 10, .43), A(2000, 12, .46)] },
-    { sym: 'BOND', name: 'T-Bonds', pit: 'CBOT Financial Pit', emoji: '📜', tick: 1 / 32, tickVal: 31.25, vol: .006, margin: 3000, depth: 10, act: 0.84, bias: 1.4, unlock: 80000,
+    { sym: 'BOND', name: 'T-Bonds', pit: 'CBOT Financial Pit', emoji: '📜', tick: 1 / 32, tickVal: 31.25, vol: .006, margin: 3000, depth: 10, act: 0.84, bias: 1.4, unlock: 150000,
       anchors: [A(1990, 1, 91), A(1991, 6, 97), A(1993, 10, 117), A(1994, 11, 98), A(1995, 12, 118), A(1996, 6, 108), A(1998, 10, 126), A(2000, 1, 98), A(2000, 12, 112)] },
-    { sym: 'SPX', name: 'S&P 500', pit: 'CME Index Pit', emoji: '📈', tick: .05, tickVal: 25, vol: .009, margin: 9000, depth: 8, act: 0.84, bias: 0.8, unlock: 250000,
+    { sym: 'SPX', name: 'S&P 500', pit: 'CME Index Pit', emoji: '📈', tick: .05, tickVal: 25, vol: .009, margin: 9000, depth: 8, act: 0.84, bias: 0.8, unlock: 600000,
       anchors: [A(1990, 1, 353), A(1990, 10, 295), A(1991, 6, 375), A(1992, 6, 410), A(1994, 6, 450), A(1995, 6, 540), A(1996, 6, 670), A(1997, 6, 880), A(1998, 6, 1130), A(1998, 10, 960), A(1999, 6, 1330), A(2000, 3, 1500), A(2000, 12, 1320)] },
   ];
   const CBY = {}; CONTRACTS.forEach((c) => { CBY[c.sym] = c; });
@@ -131,6 +133,25 @@
     { id: 'jet', name: 'Private Jet Share', emoji: '🛩️', price: 600000, upkeep: 6000, desc: 'Lunch in Aspen. Back for the close.' },
   ];
 
+  // Career ladder: net worth earns a better badge (more pits, better terms) — but badges carry monthly dues,
+  // and you can lose one if your net worth sags below 60% of its threshold for a month.
+  const CAREER = [
+    { lvl: 0, title: 'Runner', nw: 0, dues: 0, marginK: 1.0, feeK: 1.0, perk: 'Starter badge: Soybean pit' },
+    { lvl: 1, title: 'Local', nw: 12000, dues: 250, marginK: 0.95, feeK: 1.0, perk: 'Crude Oil pit · margin −5%' },
+    { lvl: 2, title: 'Seat Holder', nw: 40000, dues: 800, marginK: 0.90, feeK: 0.9, perk: 'Deutschmark pit · margin −10% · fees −10%' },
+    { lvl: 3, title: 'Floor Broker', nw: 150000, dues: 2500, marginK: 0.85, feeK: 0.8, perk: 'T-Bond pit · margin −15% · fees −20%' },
+    { lvl: 4, title: 'Pit Boss', nw: 600000, dues: 8000, marginK: 0.80, feeK: 0.7, perk: 'S&P 500 pit · margin −20% · fees −30%' },
+    { lvl: 5, title: 'Master of the Pit', nw: 5000000, dues: 25000, marginK: 0.75, feeK: 0.5, perk: 'Legend status · margin −25% · fees −50%' },
+  ];
+  const RIVALS = [
+    { id: 'tony', name: 'Big Tony', tag: 'Soybean-pit lifer', nw0: 40000, mu: .12, vol: .22, beta: .2, blow: 0 },
+    { id: 'sally', name: 'Sally Kim', tag: 'Scalping prodigy', nw0: 15000, mu: .45, vol: .55, beta: .3, blow: .15 },
+    { id: 'marcus', name: 'Marcus Webb', tag: 'Ex-bond-desk veteran', nw0: 90000, mu: .18, vol: .30, beta: .6, blow: .1 },
+    { id: 'dutch', name: 'Dutch Reilly', tag: 'Bond cowboy', nw0: 60000, mu: .35, vol: .70, beta: .8, blow: .5 },
+    { id: 'vivian', name: 'Vivian Chase', tag: 'Quant from the hedge fund', nw0: 250000, mu: .22, vol: .25, beta: .1, blow: 0 },
+    { id: 'rick', name: 'Rick "The Hammer" Dunn', tag: 'Leveraged S&P bull', nw0: 120000, mu: .30, vol: .60, beta: 1.5, blow: .6 },
+  ];
+
   const RANKS = [
     [0, 'Dead Broke'], [5e3, 'Broke Kid'], [15e3, 'Penny Pincher'], [5e4, 'Weekend Warrior'],
     [15e4, 'Rising Trader'], [5e5, 'Yuppie'], [2e6, 'Wall Street Hotshot'],
@@ -161,6 +182,8 @@
       day: 0, cash: START_CASH, pos: null, mk: {}, today: null, sess: null, tips: [],
       home: 0, car: 0, tech: 0, lux: [], billMonth: monthIdxOfDay(0),
       ytd: 0, taxDue: 0, heat: 0, fined: false, sec: null, lastOffer: -99, flags: {}, ach: {},
+      level: 0, career: { low: 0 }, notice: null, rank: 0, rivals: RIVALS.map((r) => ({ id: r.id, nw: r.nw0, broke: 0 })),
+      yr: { year: 1990, nw0: START_CASH, sessions: 0, best: 0, worst: 0 },
       unlocked: { SOY: true }, news: [], seq: 0, nwHist: [START_CASH], over: null, lastSession: null,
       stats: { trades: 0, wins: 0, losses: 0, realized: 0, fees: 0, peak: START_CASH, peakDay: 0, sessions: 0, bestDay: 0, worstDay: 0, streak: 0 },
     };
@@ -274,7 +297,7 @@
   // Position accounting for any fill (market or limit).
   function applyFill(G, S, side, qty, px, maker) {
     const c = CBY[S.sym], cur = G.pos ? G.pos.qty : 0, next = cur + side * qty;
-    const fee = qty * TECH[G.tech].fee * (maker ? 0.5 : 1);
+    const fee = qty * feeOf(G) * (maker ? 0.5 : 1);
     let realized = 0, closeQ = 0;
     if (cur !== 0 && Math.sign(cur) !== side) {
       closeQ = Math.min(Math.abs(cur), qty);
@@ -309,7 +332,15 @@
   };
   function unreal(G) { return G.pos ? (markT(G) - G.pos.entry) * G.pos.qty * CBY[G.pos.sym].tickVal : 0; }
   const equity = (G) => G.cash + unreal(G);
-  const maxLots = (G, sym) => Math.max(0, Math.floor(equity(G) / CBY[sym].margin + 1e-9));
+  const marginOf = (G, sym) => Math.round(CBY[sym].margin * CAREER[G.level || 0].marginK);
+  const feeOf = (G) => TECH[G.tech].fee * CAREER[G.level || 0].feeK;
+  const maxLots = (G, sym) => Math.max(0, Math.floor(equity(G) / marginOf(G, sym) + 1e-9));
+  // price (in ticks) at which the clearing firm would liquidate the open position
+  function liqPrice(G) {
+    if (!G.pos) return null;
+    const c = CBY[G.pos.sym], M = MAINT * marginOf(G, G.pos.sym) * Math.abs(G.pos.qty);
+    return G.pos.entry + (M - G.cash) / (G.pos.qty * c.tickVal);
+  }
 
   const dpth0 = (sym) => CBY[sym].depth;
   function startSession(G, sym, opts) {
@@ -352,7 +383,7 @@
     if (qty < 1) return { ok: false, msg: 'Invalid size.' };
     const c = CBY[S.sym], cur = G.pos ? G.pos.qty : 0, next = cur + side * qty;
     if (!forced && Math.abs(next) > Math.abs(cur) && Math.abs(next) > maxLots(G, S.sym)) {
-      return { ok: false, msg: `Margin: ${S.sym} needs ${money(c.margin)}/lot — you can hold ${maxLots(G, S.sym)}.` };
+      return { ok: false, msg: `Margin: ${S.sym} needs ${money(marginOf(G, S.sym))}/lot — you can hold ${maxLots(G, S.sym)}.` };
     }
     const before = side > 0 ? S.ask : S.bid;
     const { filled, vwap } = sweep(G, S, side, qty, 'me');
@@ -505,11 +536,19 @@
     if (o && o.resolved === 'ahead' && t === o.jt + 8) settleFrontRun(G, events);
     if (G.pos) {
       const mid = midOf(S);
-      if (equity(G) < MAINT * c.margin * Math.abs(G.pos.qty)) {
-        flatten(G, true); G.flags.margin = true;
-        const text = 'MARGIN CALL! Your clearing firm liquidated your position.';
+      const maint = MAINT * marginOf(G, S.sym) * Math.abs(G.pos.qty), ratio = equity(G) / maint;
+      if (equity(G) < maint) {
+        const lots = Math.abs(G.pos.qty);
+        flatten(G, true); G.flags.margin = true; S.warned = false;
+        const pen = lots * LIQ_PENALTY; G.cash -= pen; G.ytd -= pen; G.stats.fees += pen; G.stats.streak = 0;
+        const text = `MARGIN CALL! Your clearing firm liquidated your position and charged a ${money(pen)} liquidation fee.`;
         addNews(G, 'life', text); events.push({ kind: 'margin', text });
-      } else if (S.stop > 0 && (G.pos.entry - mid) * Math.sign(G.pos.qty) >= S.stop) {
+      } else if (ratio < 1.3 && !S.warned) {
+        S.warned = true;
+        const lp = liqPrice(G), dist = Math.abs(midOf(S) - lp);
+        events.push({ kind: 'marginwarn', text: `MARGIN WARNING: ${dist.toFixed(0)} ticks from liquidation. Cut size or get out!` });
+      } else if (ratio > 1.6) S.warned = false;
+      if (G.pos && S.stop > 0 && (G.pos.entry - midOf(S)) * Math.sign(G.pos.qty) >= S.stop) {
         flatten(G, true); G.flags.stop = true;
         events.push({ kind: 'stop', text: 'Stop-loss hit — position closed.' });
       }
@@ -543,7 +582,7 @@
     const date = dateOfDay(G.day);
     for (const e of eventsByDay[G.day] || []) addNews(G, 'era', e.text);
     // daily settlement of variation margin
-    const cashBefore = G.cash;
+    const cashBefore = G.cash, prevSPX = G.mk.SPX.close;
     for (const c of CONTRACTS) {
       const closeT = closes && closes[c.sym] != null ? closes[c.sym] : G.today.per[c.sym].closeT;
       if (G.pos && G.pos.sym === c.sym) {
@@ -553,6 +592,7 @@
       }
       G.mk[c.sym].close = closeT;
     }
+    stepRivals(G, Math.log(G.mk.SPX.close / prevSPX), events);
     // session summary
     if (S) {
       const pnl = G.cash - S.startEq;
@@ -563,14 +603,15 @@
       if (pnl >= 10000) G.flags.bigDay = true;
       if (st.streak >= 5) G.flags.streak5 = true;
       if (S.scripted && pnl >= 2000) G.flags.headline = true;
+      G.yr.sessions++; G.yr.best = Math.max(G.yr.best, pnl); G.yr.worst = Math.min(G.yr.worst, pnl);
       events.push({ kind: 'close', summary: G.lastSession });
     }
     // margin call at settlement (e.g. you held through a gap)
     if (G.pos) {
-      const c = CBY[G.pos.sym];
-      if (G.cash < MAINT * c.margin * Math.abs(G.pos.qty)) {
-        G.cash -= Math.abs(G.pos.qty) * TECH[G.tech].fee; G.pos = null; G.flags.margin = true;
-        const text = 'MARGIN CALL at settlement! Your clearing firm liquidated your overnight position.';
+      if (G.cash < MAINT * marginOf(G, G.pos.sym) * Math.abs(G.pos.qty)) {
+        const lots = Math.abs(G.pos.qty), pen = lots * (LIQ_PENALTY + feeOf(G));
+        G.cash -= pen; G.ytd -= pen; G.stats.fees += pen; G.stats.streak = 0; G.pos = null; G.flags.margin = true;
+        const text = `MARGIN CALL at settlement! Your clearing firm liquidated your overnight position and charged ${money(pen)}.`;
         addNews(G, 'life', text); events.push({ kind: 'margin', text });
       }
     }
@@ -582,6 +623,7 @@
     G.sess = null;
     G.day++;
     if (dateOfDay(G.day).getTime() >= END_MS) { G.over = 'end'; events.push({ kind: 'end', text: 'The decade is over.' }); }
+    if (!G.over) checkNotice(G, events);
     if (!G.over && monthIdxOfDay(G.day) !== G.billMonth) { G.billMonth = monthIdxOfDay(G.day); payBills(G, events); }
     if (!G.over) checkSec(G, events);
     if (!G.over) {
@@ -589,12 +631,10 @@
       G.nwHist.push(nw); if (G.nwHist.length > 800) G.nwHist.shift();
       if (nw > G.stats.peak) { G.stats.peak = nw; G.stats.peakDay = G.day; }
       if (nw < 500) G.flags.low = true;
-      for (const c of CONTRACTS) if (!G.unlocked[c.sym] && nw >= c.unlock) {
-        G.unlocked[c.sym] = true;
-        const text = `NEW PIT UNLOCKED: ${c.pit} — ${c.name}! Bigger moves, bigger margin.`;
-        addNews(G, 'life', text); events.push({ kind: 'unlock', text });
-      }
+      careerCheck(G, events);
+      standings(G, events);
     }
+    yearReview(G, events);
     for (const a of checkAchievements(G)) events.push({ kind: 'ach', text: a.name, ach: a });
     if (!G.over) { prepareDay(G); makeTips(G); }
     return events;
@@ -602,7 +642,7 @@
 
   function skipDays(G, n) {
     const events = [];
-    const STOP = ['repo', 'homeless', 'margin', 'sec', 'warn', 'prison', 'end', 'unlock'];
+    const STOP = ['repo', 'homeless', 'margin', 'sec', 'warn', 'prison', 'end', 'unlock', 'promote', 'demote', 'notice', 'noticeOk', 'life', 'review'];
     for (let i = 0; i < n && !G.over && !G.sess; i++) {
       endOfDay(G, events, null, null);
       if (events.some((e) => STOP.includes(e.kind))) break;
@@ -621,12 +661,13 @@
   const livingCost = (G) => 150 + 100 * G.home;
   function monthlyCosts(G) {
     const lux = G.lux.reduce((a, id) => a + LUX.find((l) => l.id === id).upkeep, 0);
-    return HOMES[G.home].rent + livingCost(G) + CARS[G.car].upkeep + TECH[G.tech].upkeep + lux;
+    return Math.round((HOMES[G.home].rent + livingCost(G) + CAREER[G.level || 0].dues) * inflation(G)) + CARS[G.car].upkeep + TECH[G.tech].upkeep + lux;
   }
+  const inflation = (G) => 1 + 0.03 * (dateOfDay(G.day).getUTCFullYear() - 1990); // rent, living costs and dues creep up 3%/yr; your diner wage doesn't
   const monthlyIncome = (G) => (G.home <= 1 ? 400 : 0); // diner job — you quit once you move up
   const assetValue = (G) => SELL_RATIO * (CARS[G.car].price + TECH[G.tech].price + G.lux.reduce((a, id) => a + LUX.find((l) => l.id === id).price, 0));
   const netWorth = (G) => equity(G) + assetValue(G);
-  const marginUsed = (G) => (G.pos ? Math.abs(G.pos.qty) * CBY[G.pos.sym].margin : 0);
+  const marginUsed = (G) => (G.pos ? Math.abs(G.pos.qty) * marginOf(G, G.pos.sym) : 0);
   const marginLevel = (G) => { const u = marginUsed(G); return u > 0 ? equity(G) / u : Infinity; };
 
   // Free up cash by selling luxuries, car, gear, then downgrading home. Returns false if impossible.
@@ -644,6 +685,30 @@
     return G.cash >= needFn();
   }
 
+  function lifeShock(G) {
+    if (rnd(G) >= 0.12) return null; // roughly one surprise a year
+    const base = monthlyCosts(G);
+    const opts = [
+      ['Emergency room visit, no insurance. The bill arrives.', Math.round(base * 0.8)],
+      ['Your landlord finds "unauthorized modifications" and keeps your deposit.', Math.round(HOMES[G.home].rent)],
+      ['Your brother-in-law needs a "short-term loan" for his bar. You never see it again.', Math.round(Math.max(400, Math.min(Math.max(G.cash, 0), 20000) * 0.06))],
+    ];
+    if (G.car > 0) opts.push([`The ${CARS[G.car].name} needs a major repair.`, Math.round(Math.max(300, CARS[G.car].price * 0.05))]);
+    const [text, amount] = pick(G, opts);
+    return { text, amount };
+  }
+
+  // pay what's owed now, repossessing and downgrading if that's what it takes
+  function settleBills(G, events, tax, shockAmt, extra) {
+    const needFn = () => monthlyCosts(G) - monthlyIncome(G) + tax + shockAmt + extra;
+    const costs = monthlyCosts(G), income = monthlyIncome(G), msgs = [];
+    if (!liquidateFor(G, needFn, msgs)) return goHomeless(G, events, "You can't make rent. Everything is gone. You're out on the street.");
+    G.cash -= needFn();
+    if (tax > 0) { G.taxDue = 0; G.flags.taxPaid = (G.flags.taxPaid || 0) + tax; addNews(G, 'life', `You paid the IRS ${money(tax)}.`); }
+    if (msgs.length) { const text = 'Bills overdue! ' + msgs.join('. ') + '.'; addNews(G, 'life', text); events.push({ kind: 'repo', text }); }
+    else addNews(G, 'life', `Monthly bills paid: ${money(costs)}${income ? ` (diner paycheck +$${income})` : ''}.`);
+  }
+
   function payBills(G, events) {
     const month = dateOfDay(G.day).getUTCMonth();
     if (month === 0) { // new tax year
@@ -652,13 +717,98 @@
       if (G.taxDue > 0) addNews(G, 'life', `Tax time: ${money(net)} in trading gains last year. The IRS wants ${money(G.taxDue)} by April.`);
     }
     const tax = month === 3 ? G.taxDue : 0;
-    const needFn = () => monthlyCosts(G) - monthlyIncome(G) + tax;
-    const costs = monthlyCosts(G), income = monthlyIncome(G), msgs = [];
-    if (!liquidateFor(G, needFn, msgs)) return goHomeless(G, events, "You can't make rent. Everything is gone. You're out on the street.");
-    G.cash -= needFn();
-    if (tax > 0) { G.taxDue = 0; G.flags.taxPaid = (G.flags.taxPaid || 0) + tax; addNews(G, 'life', `You paid the IRS ${money(tax)}.`); }
-    if (msgs.length) { const text = 'Bills overdue! ' + msgs.join('. ') + '.'; addNews(G, 'life', text); events.push({ kind: 'repo', text }); }
-    else addNews(G, 'life', `Monthly bills paid: ${money(costs)}${income ? ` (diner paycheck +$${income})` : ''}.`);
+    const shock = lifeShock(G);
+    if (shock) { const text = `${shock.text} It costs ${money(shock.amount)}.`; addNews(G, 'life', text); events.push({ kind: 'life', text }); }
+    const shockAmt = shock ? shock.amount : 0;
+    if (G.notice) { // a second month in default: no more grace
+      const old = G.notice; G.notice = null;
+      return settleBills(G, events, tax + old.tax, shockAmt + old.shock, old.need - old.tax - old.shock - 0);
+    }
+    const need = monthlyCosts(G) - monthlyIncome(G) + tax + shockAmt;
+    if (G.cash < need) { // can't cover it: final notice, you get a few trading days to raise the money
+      G.notice = { issued: G.day, due: G.day + NOTICE_DAYS, need: Math.round(need), tax, shock: shockAmt };
+      const text = `FINAL NOTICE: ${money(need)} is due and your account is ${money(need - G.cash)} short. Raise it within ${NOTICE_DAYS} trading days, or the repo man starts collecting.`;
+      addNews(G, 'life', text); events.push({ kind: 'notice', text });
+      return;
+    }
+    settleBills(G, events, tax, shockAmt, 0);
+  }
+
+  function checkNotice(G, events) {
+    const n = G.notice; if (!n) return;
+    if (G.cash >= n.need) {
+      G.cash -= n.need; G.notice = null; G.flags.noticeOk = true;
+      if (n.tax > 0) { G.taxDue = 0; G.flags.taxPaid = (G.flags.taxPaid || 0) + n.tax; }
+      const text = `You scraped together ${money(n.need)} and paid the notice just in time. The landlord backs off… for now.`;
+      addNews(G, 'life', text); events.push({ kind: 'noticeOk', text });
+    } else if (G.day >= n.due) {
+      G.notice = null;
+      addNews(G, 'life', 'The notice expired. The collectors arrive.');
+      settleBills(G, events, n.tax, n.shock, 0);
+    }
+  }
+
+  // ---------------------------------------------------------------- career ladder
+  function careerCheck(G, events) {
+    const nw = netWorth(G);
+    let target = 0; for (const c of CAREER) if (nw >= c.nw) target = c.lvl;
+    if (target > G.level && !G.notice) {
+      G.level = target; G.career.low = 0;
+      const opened = [];
+      for (const c of CONTRACTS) if (c.unlock <= CAREER[target].nw && !G.unlocked[c.sym]) { G.unlocked[c.sym] = true; opened.push(c.name); }
+      const cr = CAREER[target];
+      const text = `PROMOTED to ${cr.title}! ${cr.perk}. Exchange dues are now ${money(cr.dues)}/mo — stay above ${money(Math.round(cr.nw * 0.6))} net worth or you'll lose the badge.`;
+      addNews(G, 'life', text); events.push({ kind: 'promote', text, level: target, unlocked: opened });
+    } else if (G.level > 0 && nw < CAREER[G.level].nw * 0.6) {
+      if (++G.career.low >= 20) { // about a month below 60% of the badge threshold
+        const nl = G.level - 1;
+        if (!(G.pos && CBY[G.pos.sym].unlock > CAREER[nl].nw)) { // can't pull the badge while you hold a position in that pit
+          const lost = CONTRACTS.filter((c) => c.unlock > CAREER[nl].nw && G.unlocked[c.sym]).map((c) => c.name);
+          for (const c of CONTRACTS) if (c.unlock > CAREER[nl].nw) G.unlocked[c.sym] = false;
+          const old = CAREER[G.level].title; G.level = nl; G.career.low = 0;
+          const text = `DEMOTED: the exchange pulled your ${old} badge. You're a ${CAREER[nl].title} again${lost.length ? ' and locked out of ' + lost.join(', ') : ''}. Earn it back.`;
+          addNews(G, 'life', text); events.push({ kind: 'demote', text, level: nl });
+        }
+      }
+    } else G.career.low = 0;
+  }
+
+  // ---------------------------------------------------------------- rivals, standings, year in review
+  function stepRivals(G, mkt, events) {
+    RIVALS.forEach((def, i) => {
+      const r = G.rivals[i];
+      if (r.broke && G.day - r.broke > 60) r.broke = 0;
+      const ret = def.mu / 252 + def.beta * mkt + (def.vol / Math.sqrt(252)) * gauss(G);
+      r.nw = Math.max(3000, r.nw * (1 + clamp(ret, -0.5, 0.5)));
+      if (def.blow && mkt < -0.02 && !r.broke && rnd(G) < def.blow) {
+        const before = r.nw; r.nw = Math.max(5000, r.nw * 0.2); r.broke = G.day;
+        const text = `${def.name} (${def.tag}) got liquidated in the selloff: ${money(before)} down to ${money(r.nw)}!`;
+        addNews(G, 'mkt', text); events.push({ kind: 'rival', text });
+      }
+    });
+  }
+  function rankings(G) {
+    const rows = RIVALS.map((d, i) => ({ id: d.id, name: d.name, tag: d.tag, nw: G.rivals[i].nw, broke: !!G.rivals[i].broke, you: false }));
+    rows.push({ id: 'you', name: 'You', tag: CAREER[G.level || 0].title, nw: netWorth(G), you: true });
+    rows.sort((a, b) => b.nw - a.nw);
+    return rows.map((r, i) => Object.assign(r, { rank: i + 1 }));
+  }
+  function standings(G, events) {
+    const rows = rankings(G), me = rows.find((r) => r.you).rank;
+    if (G.rank && me < G.rank) { const passed = rows[me].name; const text = `You passed ${passed} on the standings. You're now #${me} on the floor.`; addNews(G, 'life', text); events.push({ kind: 'rank', text }); }
+    else if (G.rank && me > G.rank && rows[me - 2]) { const text = `${rows[me - 2].name} overtook you. You slip to #${me}.`; addNews(G, 'life', text); events.push({ kind: 'rank', text }); }
+    G.rank = me;
+  }
+  function yearReview(G, events) {
+    const yr = dateOfDay(G.day).getUTCFullYear();
+    if (G.over && G.over !== 'end') return;
+    if (yr <= G.yr.year && G.over !== 'end') return;
+    const rows = rankings(G), me = rows.find((r) => r.you);
+    const nw1 = netWorth(G);
+    const review = { year: G.yr.year, nw0: G.yr.nw0, nw1, pnl: nw1 - G.yr.nw0, rank: me.rank, of: rows.length, sessions: G.yr.sessions, best: G.yr.best, worst: G.yr.worst, title: CAREER[G.level].title, leader: rows[0].you ? rows[1] : rows[0], final: G.over === 'end' };
+    if (me.rank === 1) G.flags.top1 = true;
+    events.push({ kind: 'review', review });
+    G.yr = { year: yr, nw0: nw1, sessions: 0, best: 0, worst: 0 };
   }
 
   function checkSec(G, events) {
@@ -713,6 +863,10 @@
     { id: 'comeback', emoji: '🔥', name: 'Comeback Kid', desc: 'Fall below $500, then climb back above $50,000.', test: (G) => G.flags.low && netWorth(G) >= 5e4 },
     { id: 'rock', emoji: '🥫', name: 'Rock Bottom', desc: 'End up homeless.', test: (G) => G.over === 'homeless' },
     { id: 'trained', emoji: '🎓', name: 'Floor Trained', desc: 'Finish the Training Floor and learn to read order flow.', test: () => false },
+    { id: 'lvl3', emoji: '🏅', name: 'Floor Broker', desc: 'Earn the Floor Broker badge.', test: (G) => G.level >= 3 },
+    { id: 'lvl5', emoji: '🏆', name: 'Master of the Pit', desc: 'Earn the Master of the Pit badge.', test: (G) => G.level >= 5 },
+    { id: 'notice', emoji: '📬', name: 'Beat the Landlord', desc: 'Pay a final notice in time.', test: (G) => G.flags.noticeOk },
+    { id: 'top1', emoji: '🥇', name: 'King of the Floor', desc: 'Finish a year ranked #1 on the floor.', test: (G) => G.flags.top1 },
     { id: 'y2k', emoji: '🎆', name: 'Y2K Survivor', desc: 'Make it to the end of the decade.', test: (G) => G.over === 'end' },
   ];
   function checkAchievements(G) {
@@ -766,7 +920,7 @@
 
   const api = {
     START_CASH, SELL_RATIO, SAVE_VERSION, TAX_RATE, MAINT, N_STEPS, STEP_MS, CONTRACTS, CBY, HOMES, CARS, TECH, LUX, RANKS, ACH, ERA_EVENTS,
-    newGame, startSession, stepSession, trade, flatten, setStop, placeLimit, cancelOrders, preview, forceRegime, inject, respondOffer, skipDays, recentFlow, flowGauge, shoutsNow, ladder, quote,
+    newGame, startSession, stepSession, CAREER, RIVALS, marginOf, feeOf, liqPrice, rankings, inflation, trade, flatten, setStop, placeLimit, cancelOrders, preview, forceRegime, inject, respondOffer, skipDays, recentFlow, flowGauge, shoutsNow, ladder, quote,
     buyItem, sellItem, moveHome, checkAchievements,
     netWorth, equity, unreal, maxLots, marginUsed, marginLevel, markT, monthlyCosts, monthlyIncome, rankOf, livingCost,
     dateOfDay, clockOf, fmtPrice, priceOf,
