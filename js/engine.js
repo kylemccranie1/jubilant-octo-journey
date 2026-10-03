@@ -13,6 +13,7 @@
   const SAVE_VERSION = 4;
   const LIQ_PENALTY = 25;      // clearing-firm fee per lot when it liquidates you
   const NOTICE_DAYS = 5;       // trading days to cover an unpaid month before the repo man collects
+  const VOL_MUL = 1.5;         // global daily-volatility multiplier (market pace)
   const K_FLOW = 0.22;         // strength of order-flow drift (in session-sigma units per step)
 
   // ---------------------------------------------------------------- calendar (weekdays only)
@@ -205,7 +206,7 @@
     const evs = eventsByDay[day] || [], per = {};
     for (const c of CONTRACTS) {
       const mk = G.mk[c.sym];
-      const sig = c.vol * (c.sym === 'SPX' ? Math.sqrt((ERA_VOL[year] || .2) / .15) : 1);
+      const sig = VOL_MUL * c.vol * (c.sym === 'SPX' ? Math.sqrt((ERA_VOL[year] || .2) / .15) : 1);
       const dev = Math.log(mk.close * c.tick) - Math.log(anchorPrice(c.sym, prevMs));
       const ret = Math.log(anchorPrice(c.sym, ms)) - Math.log(anchorPrice(c.sym, prevMs)) - 0.015 * dev + sig * gauss(G);
       let shock = 0, text = null, scripted = false;
@@ -241,7 +242,7 @@
   // when a level is cleared the price steps. Your market orders do the same (slippage + impact), and your
   // resting limit orders sit in the queue and get filled as the crowd trades through them.
   const SIZE_F = [0.25, 0.5, 1, 2, 4], SIZE_W = [0.33, 0.30, 0.22, 0.10, 0.05];
-  const SHOUT_RATE = 0.35;   // expected crowd orders per step
+  const SHOUT_RATE = 0.5;    // expected crowd orders per step
   const REG_BIAS = 0.22;     // buy-probability tilt that an informed-flow regime leaks into ordinary crowd orders
   const REG_LEAK = 0.35;     // ...scaled down: the real signal is the informed BLOCKS below
   const INF_RATE = 0.085;    // informed block orders per step during a lean (x regime strength x pit bias)
