@@ -312,27 +312,27 @@
   const maxLots = (G, sym) => Math.max(0, Math.floor(equity(G) / CBY[sym].margin + 1e-9));
 
   const dpth0 = (sym) => CBY[sym].depth;
-  function startSession(G, sym) {
+  function startSession(G, sym, opts) {
     const c = CBY[sym];
     if (G.over || G.sess) return { ok: false, msg: 'Not available.' };
     if (!c || !G.unlocked[sym]) return { ok: false, msg: 'That pit is locked.' };
     if (G.pos && G.pos.sym !== sym) return { ok: false, msg: `You're holding ${G.pos.sym}. Trade that pit to close it out.` };
-    const N = N_STEPS, per = G.today.per[sym], open = per.openT;
+    const N = N_STEPS, per = G.today.per[sym], open = per.openT, training = !!(opts && opts.training);
     const S = {
       sym, n: N, t: 0, open, target: per.closeT, sigT: Math.max(28, open * per.sig),
       bid: open, ask: open + 1, bids: {}, asks: {}, thinA: 1, thinB: 1, imb: 0, volume: 0,
       regime: { f: 0, s: 0, left: 0 }, hint: 0, burst: null, react: null, rev: null, fundJ: 0, totJ: 0,
       path: [open + 0.5], prints: [], hit: {}, notes: [], pseq: 0, last: open, flowEma: 0, stepFlow: 0, events: [], orders: [], stop: 0, done: false,
-      startEq: 0, wins: 0, trades: 0, scripted: !!per.scripted && !!per.text, aheadEntry: null, offer: null, makerFills: 0,
+      startEq: 0, wins: 0, trades: 0, training, scripted: !!per.scripted && !!per.text, aheadEntry: null, offer: null, makerFills: 0,
     };
     G.sess = S;
     ensureDepth(G, S, 5);
-    if (per.text) {
+    if (per.text && !training) {
       const tEv = 60 + Math.floor(rnd(G) * 320), J = open * (Math.exp(per.shock) - 1);
       S.events.push({ t: tEv, text: per.text, jump: J, scripted: per.scripted });
       S.totJ = J;
     }
-    if (netWorth(G) >= 15000 && !G.sec && G.day - G.lastOffer >= 15 && rnd(G) < .10) {
+    if (!training && netWorth(G) >= 15000 && !G.sec && G.day - G.lastOffer >= 15 && rnd(G) < .10) {
       const side = rnd(G) < .5 ? 1 : -1, t0 = 100 + Math.floor(rnd(G) * 250), lots = dpth0(sym) * pick(G, [6, 10, 15, 20]);
       S.offer = { t: t0, side, lots, jt: t0 + 30, bonus: lots * 2.5, resolved: null };
       G.lastOffer = G.day;
@@ -391,6 +391,12 @@
     while (rem > 0 && guard--) { const L = book[p] > 0 ? book[p] : D, t = Math.min(L, rem); cost += t * p; rem -= t; p += side > 0 ? 1 : -1; }
     const vwap = cost / qty; return { vwap, slip: Math.abs(vwap - best) };
   }
+  // training-floor helpers: script the hidden lean and inject crowd orders
+  function forceRegime(G, f, s, len) { const S = G.sess; if (S) { S.regime = { f, s, left: len }; S.hint = f; } }
+  function inject(G, side, lots) {
+    const S = G.sess; if (!S || S.done) return { filled: 0 };
+    const r = sweep(G, S, side, Math.max(1, Math.round(lots)), 'pit'); S.imb += side * r.filled / dpth(S); return r;
+  }
   function cancelOrders(G) { const S = G.sess; if (!S) return; S.orders = []; }
 
   function respondOffer(G, choice) {
@@ -444,7 +450,7 @@
     const c = CBY[S.sym], t = S.t;
     const fund = S.open + (S.target - S.totJ - S.open) * (t / S.n) + S.fundJ;
     const gain = 0.22 + 1.6 * (t / S.n) * (t / S.n) + (S.burst ? 0.9 * S.burst.left / S.burst.max : 0);
-    const pull = clamp(gain * (fund - midOf(S)) / S.sigT, -0.3, 0.3);
+    const pull = S.training ? 0 : clamp(gain * (fund - midOf(S)) / S.sigT, -0.3, 0.3); // training floor: the scripted lean is the only force
     let p = 0.5 + REG_BIAS * (c.bias || 1) * S.regime.f * S.regime.s + pull;
     if (S.burst) p += 0.5 * S.burst.tilt * S.burst.dir * burstFrac * clamp(Math.abs(fund - midOf(S)) / (0.5 * S.sigT), 0.25, 1);
     if (S.rev && S.rev.age >= 2) p += S.rev.dir * S.rev.str * (S.rev.left / 34);
@@ -706,6 +712,7 @@
     { id: 'tax', emoji: '🏛️', name: 'Uncle Sam Thanks You', desc: 'Pay $10,000+ in taxes.', test: (G) => (G.flags.taxPaid || 0) >= 1e4 },
     { id: 'comeback', emoji: '🔥', name: 'Comeback Kid', desc: 'Fall below $500, then climb back above $50,000.', test: (G) => G.flags.low && netWorth(G) >= 5e4 },
     { id: 'rock', emoji: '🥫', name: 'Rock Bottom', desc: 'End up homeless.', test: (G) => G.over === 'homeless' },
+    { id: 'trained', emoji: '🎓', name: 'Floor Trained', desc: 'Finish the Training Floor and learn to read order flow.', test: () => false },
     { id: 'y2k', emoji: '🎆', name: 'Y2K Survivor', desc: 'Make it to the end of the decade.', test: (G) => G.over === 'end' },
   ];
   function checkAchievements(G) {
@@ -759,7 +766,7 @@
 
   const api = {
     START_CASH, SELL_RATIO, SAVE_VERSION, TAX_RATE, MAINT, N_STEPS, STEP_MS, CONTRACTS, CBY, HOMES, CARS, TECH, LUX, RANKS, ACH, ERA_EVENTS,
-    newGame, startSession, stepSession, trade, flatten, setStop, placeLimit, cancelOrders, preview, respondOffer, skipDays, recentFlow, flowGauge, shoutsNow, ladder, quote,
+    newGame, startSession, stepSession, trade, flatten, setStop, placeLimit, cancelOrders, preview, forceRegime, inject, respondOffer, skipDays, recentFlow, flowGauge, shoutsNow, ladder, quote,
     buyItem, sellItem, moveHome, checkAchievements,
     netWorth, equity, unreal, maxLots, marginUsed, marginLevel, markT, monthlyCosts, monthlyIncome, rankOf, livingCost,
     dateOfDay, clockOf, fmtPrice, priceOf,
