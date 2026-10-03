@@ -61,10 +61,11 @@
   function renderTop() {
     const nw = E.netWorth(G), prev = G.nwHist.length > 1 ? G.nwHist[G.nwHist.length - 2] : nw, d = nw - prev;
     const bills = E.monthlyCosts(G) - E.monthlyIncome(G);
+    const runway = bills > 0 ? Math.max(0, G.cash) / bills : 99;
     $('top').innerHTML = `
       <div class="top-row"><span class="date">📅 ${dateStr(G.day)}</span><span><span class="rank">${E.rankOf(nw)}</span> <button class="mute" data-mute="1" aria-label="Toggle sound">${window.Sfx && window.Sfx.muted ? '🔇' : '🔊'}</button></span></div>
       <div class="nw ${nw < E.START_CASH * .5 ? 'down' : ''}">${big(nw)} <small class="${cls(d)}" style="font-size:12px">${d ? sgn(d) : ''}</small></div>
-      <div class="sub"><span>Account <b>${money(G.cash)}</b></span>${G.pos ? `<span>Open <b class="${cls(E.unreal(G))}">${sgn(E.unreal(G))}</b></span>` : ''}<span>Bills <b>${money(bills)}/mo</b></span></div>`;
+      <div class="sub"><span>Account <b>${money(G.cash)}</b></span>${G.pos ? `<span>Open <b class="${cls(E.unreal(G))}">${sgn(E.unreal(G))}</b></span>` : ''}<span>Bills <b>${money(bills)}/mo</b></span>${G.notice ? `<span class="down blink">⚠ NOTICE: ${money(G.notice.need)} by ${dateStr(G.notice.due)}</span>` : (runway < 12 ? `<span class="${runway < 3 ? 'down' : 'amber'}">Runway <b>${runway.toFixed(1)} mo</b></span>` : '')}</div>`;
     const heads = G.news.filter((n) => n.tag !== 'tip').slice(0, 5).map((n) => n.text).join('   ◆   ');
     if ($('tapeText').dataset.t !== heads) { $('tapeText').textContent = heads; $('tapeText').dataset.t = heads; }
   }
@@ -79,6 +80,11 @@
     const nw = E.netWorth(G);
     let html = '';
     if (G.over) return '<div class="empty">Game over.</div>';
+    if (G.notice) {
+      const dl = Math.max(0, G.notice.due - G.day);
+      html += `<div class="card notice"><b>📬 FINAL NOTICE</b><br>${money(G.notice.need)} is due and you have <b>${money(G.cash)}</b> in the account. You have <b>${dl} trading day${dl === 1 ? '' : 's'}</b> to raise the difference, or the repo man collects. Trade your way out — or skip and face it.</div>`;
+    }
+    html += careerCard(nw);
     if (G.pos) {
       const c = E.CBY[G.pos.sym], u = E.unreal(G);
       html += `<div class="card" style="border-color:var(--amber)">📌 Holding <b>${G.pos.qty > 0 ? 'LONG' : 'SHORT'} ${Math.abs(G.pos.qty)} ${c.sym}</b> @ ${fp(c.sym, G.pos.entry)} overnight · open P&amp;L <b class="${cls(u)}">${sgn(u)}</b>
@@ -93,7 +99,7 @@
         <div class="emoji">${c.emoji}</div>
         <div class="grow"><div class="title">${c.name} <span class="tag">${c.sym}</span></div>
           <div class="desc">${c.pit}</div>
-          <div class="meta">${locked ? `🔒 Unlocks at ${big(c.unlock)} net worth` : `Last ${fp(c.sym, closeT)} · ${money(c.tickVal, 2)}/tick · ${money(c.margin)} margin/lot`}</div></div>
+          <div class="meta">${locked ? `🔒 Unlocks at ${big(c.unlock)} net worth` : `Last ${fp(c.sym, closeT)} · ${money(c.tickVal, 2)}/tick · ${money(E.marginOf(G, c.sym))} margin/lot`}</div></div>
         ${locked || blocked ? '' : `<span class="tag">max ${E.maxLots(G, c.sym)} lots</span>`}</div>`;
     }
     html += `<div class="card tip-card row tap" data-train="1"><div class="grow" style="font-size:13px">🎓 <b>Training Floor</b>: a 2-minute interactive lesson on reading order flow.</div><span>›</span></div>`;
@@ -101,6 +107,17 @@
       <div class="dim" style="font-size:11px;margin-top:6px">Skipping lets the market move without you (positions are marked to market daily; margin calls still apply). Bills still come due.</div>`;
     html += `<div class="card" style="margin-top:12px;font-size:12px;color:var(--dim)"><b>How the pit works:</b> every shout is a real order eating the book — watch the ladder and the tape. Big BUYs lift the offer and push price up; the crowd's lean (the pit's hand signals and the flow gauge) tells you which way the informed money is going. <b>BUY</b>/<b>SELL</b> cross the spread and walk the book, so big orders slip and move price (then partly revert). <b>Join BID/OFFER</b> rests an order in the queue: great for taking profit into strength, dangerous for quoting both sides — you mostly get filled when the market is running over you. Use a stop. Size small until you've earned it.</div>`;
     return html;
+  }
+
+  function careerCard(nw) {
+    const cr = E.CAREER[G.level], nx = E.CAREER[G.level + 1], infl = E.inflation(G);
+    const prog = nx ? Math.max(0, Math.min(1, (nw - cr.nw) / (nx.nw - cr.nw))) : 1;
+    const nextPit = nx ? E.CONTRACTS.filter((c) => c.unlock > cr.nw && c.unlock <= nx.nw).map((c) => c.name).join(', ') : '';
+    const floor = Math.round(cr.nw * 0.6);
+    return `<div class="card career"><div class="row"><div class="emoji">🏅</div><div class="grow"><div class="title">${cr.title}</div><div class="desc">${cr.perk}</div></div>
+      <div class="px"><div class="p">${cr.dues ? money(Math.round(cr.dues * infl)) : 'No'}</div><div class="c dim">dues/mo</div></div></div>
+      ${nx ? `<div class="prog"><i style="width:${(prog * 100).toFixed(0)}%"></i></div><div class="desc">Next: <b>${nx.title}</b> at ${big(nx.nw)} net worth${nextPit ? ' (opens ' + nextPit + ')' : ''} · dues ${money(Math.round(nx.dues * infl))}/mo</div>` : '<div class="desc">You are at the top of the ladder.</div>'}
+      ${G.level > 0 ? `<div class="desc ${nw < floor * 1.3 ? 'down' : ''}">Keep net worth above <b>${big(floor)}</b> or the exchange pulls your badge${G.career.low ? ` (${G.career.low}/20 days below)` : ''}.</div>` : ''}</div>`;
   }
 
   function viewLedger() {
@@ -123,6 +140,9 @@
       const l = G.lastSession;
       html += `<h2>Last session</h2><div class="card">${E.CBY[l.sym].emoji} ${l.sym} · <b class="${cls(l.pnl)}">${sgn(l.pnl)}</b> · ${l.trades} trades, ${l.wins} winners</div>`;
     }
+    const yrNow = nw - G.yr.nw0;
+    html += `<h2>${G.yr.year} so far</h2><div class="card" style="font-size:13px">Net worth <b class="${cls(yrNow)}">${sgn(yrNow)}</b> this year · ${G.yr.sessions} sessions · best <b class="up">${sgn(G.yr.best)}</b> · worst <b class="down">${sgn(G.yr.worst)}</b></div>`;
+    html += '<h2>🏁 Floor standings</h2>' + E.rankings(G).map((r) => `<div class="card row ${r.you ? 'cur' : ''}" style="padding:7px 10px"><div class="mono" style="width:22px;color:var(--dim)">${r.rank}</div><div class="grow"><div class="title" style="font-size:14px">${r.you ? '⭐ ' : ''}${r.name}${r.broke ? ' <span class="tag">💥 wiped out</span>' : ''}</div><div class="desc">${r.tag}</div></div><div class="px"><div class="p">${big(r.nw)}</div></div></div>`).join('');
     html += `<h2>Net worth history</h2><div class="card">${lineChart(G.nwHist.slice(-260))}</div>`;
     return html;
   }
@@ -187,7 +207,7 @@
   // ---------- event processing (after a session closes or days are skipped)
   const MODAL = {
     repo: ['🚨 Repo Man!', 'bad', 'alarm'], margin: ['📞 MARGIN CALL', 'bad', 'alarm'], insider: ['🤫 Front-running', '', 'sneaky'],
-    warn: ['👀 Uh-oh…', 'bad', 'sneaky'], sec: ['⚖️ CFTC SETTLEMENT', 'bad', 'alarm'], unlock: ['🔓 New pit unlocked', 'good', 'ach'],
+    warn: ['👀 Uh-oh…', 'bad', 'sneaky'], promote: ['🏅 PROMOTED', 'good', 'ach'], demote: ['📉 BADGE PULLED', 'bad', 'lose'], notice: ['📬 FINAL NOTICE', 'bad', 'alarm'], noticeOk: ['😮‍💨 Just in time', 'good', 'ach'], life: ['🎲 Life happens', '', 'error'], sec: ['⚖️ CFTC SETTLEMENT', 'bad', 'alarm'], unlock: ['🔓 New pit unlocked', 'good', 'ach'],
   };
   async function processEvents(evs) {
     noteAch(evs.filter((e) => e.kind === 'ach').map((e) => e.ach));
@@ -200,6 +220,13 @@
           body: `<p class="mono" style="font-size:30px;margin:4px 0;color:var(--${s.pnl >= 0 ? 'up' : 'down'})">${sgn(s.pnl)}</p>
             <p>${c.name} · ${s.trades} trades · ${s.wins} winners</p>${s.overnight ? '<p class="dim">You\'re holding a position overnight.</p>' : ''}`,
         });
+      } else if (e.kind === 'review') {
+        const r = e.review, up = r.pnl >= 0;
+        sfx(up ? 'win' : 'lose');
+        await showModal({ kind: up ? 'good' : 'bad', title: `📋 ${r.year} ${r.final ? 'final ' : ''}review`,
+          body: `<p class="mono" style="font-size:24px;margin:2px 0;color:var(--${up ? 'up' : 'down'})">${sgn(r.pnl)}</p><p>${big(r.nw0)} → <b>${big(r.nw1)}</b></p>
+            <p>You finished <b>#${r.rank} of ${r.of}</b> on the floor as a <b>${r.title}</b>.${r.leader ? `<br><span class="dim" style="font-size:12px">Leader: ${r.leader.name} (${big(r.leader.nw)})</span>` : ''}</p>
+            <p class="dim mono" style="font-size:12px">${r.sessions} sessions · best ${sgn(r.best)} · worst ${sgn(r.worst)}</p>` });
       } else if (MODAL[e.kind]) {
         const m = MODAL[e.kind]; sfx(m[2]);
         await showModal({ kind: m[1], title: m[0], body: `<p>${e.text}</p>` });
@@ -236,8 +263,9 @@
         buttons: [['Start over', 'primary']] });
     } else {
       sfx('win');
+      const fr = E.rankings(G).find((r) => r.you).rank;
       await showModal({ kind: 'good', title: '🎆 THE DECADE ENDS',
-        body: `<p>December 2000. You finished as a</p><p style="font-size:22px;color:var(--amber);font-weight:800">${E.rankOf(nw)}</p><p>Final net worth <b class="mono">${big(nw)}</b></p>${stats}`,
+        body: `<p>December 2000. You finished as a</p><p style="font-size:22px;color:var(--amber);font-weight:800">${E.rankOf(nw)}</p><p>Final net worth <b class="mono">${big(nw)}</b> · ranked <b>#${fr} of 7</b> on the floor</p>${stats}`,
         buttons: [['Play again', 'primary']] });
     }
     newGame();
@@ -327,6 +355,7 @@
     for (const e of evs) {
       if (e.kind === 'headline') { banner(e.text, e.jump > 0 ? 'up' : 'down'); sfx('news'); buzz(60); }
       else if (e.kind === 'margin') { banner(e.text, 'down'); sfx('alarm'); buzz([120, 60, 120]); }
+      else if (e.kind === 'marginwarn') { banner(e.text, 'down'); sfx('alarm'); buzz([60, 40, 60, 40, 60]); }
       else if (e.kind === 'stop') { toast(e.text); sfx('sell'); buzz(40); }
       else if (e.kind === 'insider') { toast(e.text); }
       else if (e.kind === 'offer') await offerFlow(e);
@@ -378,7 +407,7 @@
     const S = G.sess; if (!S) return;
     const sym = S.sym, c = E.CBY[sym], t = S.t, q = E.quote(S), mid = q.mid, bid = q.bid, ask = q.ask, D = c.depth;
     const open = S.path[0], chg = (mid - open) / open;
-    $('pClock').textContent = E.clockOf(t) + ' CT';
+    $('pClock').textContent = E.clockOf(t) + ' CT' + (G.notice ? ` · ⚠ ${money(G.notice.need)} due in ${Math.max(0, G.notice.due - G.day)}d` : '');
     $('pProg').style.width = (t / S.n * 100) + '%';
     const lastR = Math.max(bid, Math.min(ask, Math.round(S.last)));
     if (live.lastR != null && lastR !== live.lastR) { live.flash = { up: lastR > live.lastR, until: performance.now() + 320 }; }
@@ -406,10 +435,13 @@
     $('pShouts').innerHTML = sh.map((s) => { const mine = s[4] === 'me' || s[4] === 'mine'; return `<div class="sh ${s[1] > 0 ? 'b' : 's'} ${s[2] >= D * 2 ? 'bigsh' : ''} ${mine ? 'mine' : ''}">${mine ? '★ ' : ''}${s[4] === 'block' ? 'PAPER ' : ''}${s[1] > 0 ? 'BUY' : 'SELL'} ${s[2]} <small>${fp(sym, Math.round(s[3]))}</small></div>`; }).join('') || '<div class="sh dim">…quiet…</div>';
     // position
     const p = G.pos, u = E.unreal(G), dayPnl = E.equity(G) - S.startEq;
+    let liqTxt = '', danger = false;
+    if (p) { const lp = E.liqPrice(G), dist = (E.markT(G) - lp) * Math.sign(p.qty); danger = dist < 12; liqTxt = `<b class="${dist < 25 ? 'down' : 'dim'}">Liq ${fp(sym, Math.round(lp))} (${Math.max(0, Math.round(dist))}t)</b> `; }
+    $('pit').classList.toggle('danger', danger);
     const ords = S.orders.map((o) => `${o.side > 0 ? 'BID' : 'OFFER'} ${o.rem}@${fp(sym, o.price)} (${o.ahead} ahead)`).join(' · ');
     $('pPos').innerHTML = `<div>${p ? `<b class="${p.qty > 0 ? 'up' : 'down'}">${p.qty > 0 ? 'LONG' : 'SHORT'} ${Math.abs(p.qty)}</b> @ ${fp(sym, p.entry)}` : '<span class="dim">Flat</span>'}</div>
       <div>Open <b class="${cls(u)}">${sgn(u)}</b></div><div>Session <b class="${cls(dayPnl)}">${sgn(dayPnl)}</b></div>
-      <div class="dim">${ords || 'Max ' + E.maxLots(G, sym) + ' lots'}</div>`;
+      <div class="dim">${liqTxt}${ords || (p ? '' : 'Max ' + E.maxLots(G, sym) + ' lots')}</div>`;
     $('pStop').textContent = 'Stop: ' + (STOPS[live.stopIdx] ? STOPS[live.stopIdx] + ' ticks' : 'Off');
     $('pFlat').disabled = !p || live.paused;
     $('pCancel').disabled = !S.orders.length || live.paused; $('pBid').disabled = $('pOffer').disabled = live.paused;
