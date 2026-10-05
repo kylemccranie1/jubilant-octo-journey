@@ -10,6 +10,7 @@
 
   let G = null, tab = 'pit', selSym = 'SOY', seen = 0, toastTimer = null, busy = false;
   let scene = null, titleScene = null;
+  let duel = null; // seeded duel sandbox: { ch, realG, titleVisible, name, opp }
   let live = null; // { timer, speed, paused, qty, stopIdx, bannerTimer, lastSave }
   let trophies = {};
   try { trophies = JSON.parse(localStorage.getItem(TROPHY_KEY)) || {}; } catch (e) {}
@@ -29,7 +30,7 @@
     const t = $('toast'); t.textContent = msg; t.classList.remove('hidden');
     clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), 2200);
   }
-  function save() { if (tut) return; try { localStorage.setItem(SAVE_KEY, JSON.stringify(G)); } catch (e) {} }
+  function save() { if (tut || duel) return; try { localStorage.setItem(SAVE_KEY, JSON.stringify(G)); } catch (e) {} }
   function load() { try { const s = JSON.parse(localStorage.getItem(SAVE_KEY)); return s && s.v === E.SAVE_VERSION ? s : null; } catch (e) { return null; } }
   function clearSave() { try { localStorage.removeItem(SAVE_KEY); } catch (e) {} }
   function noteAch(list) {
@@ -103,6 +104,7 @@
         ${locked || blocked ? '' : `<span class="tag">max ${E.maxLots(G, c.sym)} lots</span>`}</div>`;
     }
     html += `<div class="card tip-card row tap" data-train="1"><div class="grow" style="font-size:13px">🎓 <b>Training Floor</b>: a 2-minute interactive lesson on reading order flow.</div><span>›</span></div>`;
+    html += `<div class="card tip-card row tap" data-duel="1"><div class="grow" style="font-size:13px">⚔️ <b>Seeded Duel</b>: same pit, same day, same crowd. Beat a friend's P&amp;L.</div><span>›</span></div>`;
     html += `<h2>Between sessions</h2><div class="chips"><button data-skip="1">Skip day</button><button data-skip="5">Skip week</button><button data-skip="21">Skip month</button></div>
       <div class="dim" style="font-size:11px;margin-top:6px">Skipping lets the market move without you (positions are marked to market daily; margin calls still apply). Bills still come due.</div>`;
     html += `<div class="card" style="margin-top:12px;font-size:12px;color:var(--dim)"><b>How the pit works:</b> every shout is a real order eating the book — watch the ladder and the tape. Big BUYs lift the offer and push price up; the crowd's lean (the pit's hand signals and the flow gauge) tells you which way the informed money is going. <b>BUY</b>/<b>SELL</b> cross the spread and walk the book, so big orders slip and move price (then partly revert). <b>Join BID/OFFER</b> rests an order in the queue: great for taking profit into strength, dangerous for quoting both sides — you mostly get filled when the market is running over you. Use a stop. Size small until you've earned it.</div>`;
@@ -325,6 +327,7 @@
     const evs = E.stepSession(G);
     feedScene(S, evs);
     handleLiveEvents(evs);
+    if (!live || !G) return;
     if (G.sess && !G.sess.done) {
       const sh = E.shoutsNow(G, 1)[0];
       if (sh && sh[0] === S.t && sh[0] !== live.lastShout) { live.lastShout = sh[0]; if (sh[2] >= E.CBY[S.sym].depth * 2) sfx('shout'); }
@@ -361,7 +364,7 @@
       else if (e.kind === 'insider') { toast(e.text); }
       else if (e.kind === 'offer') await offerFlow(e);
     }
-    if (closeEv || G.over || !G.sess) await leaveLive(evs);
+    if (closeEv || G.over || !G.sess) await (duel ? finishDuel() : leaveLive(evs));
   }
 
   async function offerFlow(e) {
@@ -690,9 +693,148 @@
     if (G.sess) enterLive(true);
   }
 
+
+  // =====================================================================  SEEDED DUEL
+  // Two players trade the identical session (same pit, day, headlines, crowd) from the same $25k. Results travel in a link.
+  const NAME_KEY = 'ws90_name';
+  const b64e = (o) => btoa(unescape(encodeURIComponent(JSON.stringify(o)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const b64d = (s) => JSON.parse(decodeURIComponent(escape(atob(s.replace(/-/g, '+').replace(/_/g, '/')))));
+  const duelLink = (o) => location.href.split('#')[0] + '#duel=' + b64e(o);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  function parseDuel(text) {
+    try {
+      const m = String(text).match(/duel=([A-Za-z0-9_-]+)/), o = b64d(m ? m[1] : String(text).trim());
+      if (o && typeof o.seed === 'number' && (!o.a || typeof o.a.p === 'number') && (!o.b || typeof o.b.p === 'number')) return o;
+    } catch (e) {}
+    return null;
+  }
+  async function askName() {
+    let n = ''; try { n = localStorage.getItem(NAME_KEY) || ''; } catch (e) {}
+    const i = await showModal({ title: 'Your trading name', body: `<p class="dim" style="font-size:12px">Shown to your opponent on the scoreboard.</p><input id="duelName" maxlength="14" value="${esc(n)}" placeholder="e.g. Sally" style="width:100%;font-size:16px;padding:8px;margin-top:6px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px">`, buttons: [['Go', 'primary'], ['Cancel', '']] });
+    const v = ($('duelName') ? $('duelName').value : '').trim().slice(0, 14) || 'Rookie';
+    if (i !== 0) return null;
+    try { localStorage.setItem(NAME_KEY, v); } catch (e) {}
+    return v;
+  }
+  async function duelMenu() {
+    if (tut || busy || duel) return;
+    if (G && G.sess) { toast('Finish your session first.'); return; }
+    const i = await showModal({ title: '⚔️ Seeded Duel',
+      body: '<p style="font-size:13px">You and a friend trade the <b>exact same session</b>: same pit, same day, same headlines, same crowd, same $25,000. Best P&amp;L wins. Your results travel in a link you text each other. Your real career is untouched.</p>',
+      buttons: [['Challenge a friend', 'primary'], ['Today\'s Daily Duel', ''], ['I have a code or link', ''], ['Cancel', '']] });
+    if (i === 0) startDuel({ seed: (Math.random() * 2 ** 31) | 0 });
+    else if (i === 1) { const d = new Date(); startDuel({ seed: d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate(), daily: 1 }); }
+    else if (i === 2) {
+      const j = await showModal({ title: 'Paste the challenge', body: '<textarea id="duelCode" rows="4" placeholder="Paste the link or code here" style="width:100%;font-size:14px;padding:8px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px"></textarea>', buttons: [['Open', 'primary'], ['Cancel', '']] });
+      if (j !== 0) return;
+      const o = parseDuel($('duelCode').value); if (!o) { toast('That code does not look right.'); sfx('error'); return; }
+      startDuel(o);
+    }
+  }
+  async function startDuel(o) {
+    if (tut || duel || busy) return;
+    if (G && G.sess) { toast('Finish your session first.'); return; }
+    const ch = E.duelFromSeed(o.seed), c = E.CBY[ch.sym];
+    if (o.a && o.b) { await showDuelResult(ch, o, null); return; }
+    const intro = o.a
+      ? `<p><b>${esc(o.a.n)}</b> challenged you in <b>${c.emoji} ${c.name}</b> on <b>${dateStr(ch.day)}</b>. Their score stays hidden until you finish.</p>`
+      : `<p>${o.daily ? 'Today\'s Daily Duel: ' : ''}<b>${c.emoji} ${c.name}</b> on <b>${dateStr(ch.day)}</b>.</p>`;
+    const i = await showModal({ title: '⚔️ Duel', body: `${intro}<p class="dim" style="font-size:12px">One session, $25,000 to start, no customer offers, fixed 1× speed. Anything you hold at the close is marked to the closing price.</p>`, buttons: [['Ring the bell', 'primary'], ['Back', '']] });
+    if (i !== 0) return;
+    const name = await askName(); if (!name) return;
+    const titleVisible = !$('title').classList.contains('hidden');
+    duel = { ch, o, name, realG: G, titleVisible };
+    G = E.duelGame(ch);
+    if (titleVisible) $('title').classList.add('hidden'); else $('app').classList.add('hidden');
+    E.startSession(G, ch.sym, { duel: ch.seed });
+    sfx('bell');
+    enterLive(false);
+    live.speed = 1; $('pSpeed').textContent = '1×'; startTimer();
+    $('pSpeed').style.display = 'none'; $('pFF').style.display = 'none';
+    $('pName').textContent = `⚔️ ${c.emoji} ${c.name}`;
+  }
+  function exitDuel() {
+    const d = duel; if (!d) return;
+    stopTimer(); $('pit').classList.add('hidden'); document.body.classList.remove('live');
+    if (scene) scene.stop(); if (window.Sfx) window.Sfx.roarStop();
+    $('pSpeed').style.display = ''; $('pFF').style.display = '';
+    live = null; duel = null; G = d.realG;
+    if (d.titleVisible) { $('title').classList.remove('hidden'); if (titleScene) { titleScene.resize(); titleScene.start(); } }
+    else if (G) { $('app').classList.remove('hidden'); render(); }
+  }
+  async function finishDuel() {
+    const d = duel, ls = G.lastSession || { pnl: G.cash - E.DUEL_CASH, trades: 0, wins: 0 };
+    const me = { n: d.name, p: Math.round(ls.pnl), tr: ls.trades, w: ls.wins, lg: ls.log || [] };
+    stopTimer(); live.modalOpen = true;
+    exitDuel();
+    const o = d.o, out = o.a ? { seed: o.seed, daily: o.daily, a: o.a, b: me } : { seed: o.seed, daily: o.daily, a: me };
+    sfx(me.p >= 0 ? 'win' : 'lose');
+    await showDuelResult(d.ch, out, me);
+  }
+  function drawDuel(cv, ch, a, b) {
+    const path = E.duelPath(ch), dpr = window.devicePixelRatio || 1, r = cv.getBoundingClientRect();
+    cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
+    const g = cv.getContext('2d'), W = cv.width, H = cv.height, n = path.length;
+    let lo = Math.min(...path), hi = Math.max(...path);
+    for (const p of [a, b]) if (p) for (const f of p.lg) { lo = Math.min(lo, f[2]); hi = Math.max(hi, f[2]); }
+    const pad = Math.max(2, (hi - lo) * 0.1); lo -= pad; hi += pad;
+    const X = (t) => 6 * dpr + t / (n - 1) * (W - 12 * dpr), Y = (v) => H - 6 * dpr - (v - lo) / (hi - lo) * (H - 12 * dpr);
+    g.clearRect(0, 0, W, H);
+    g.strokeStyle = 'rgba(160,200,255,.55)'; g.lineWidth = 1.5 * dpr; g.beginPath();
+    path.forEach((v, t) => (t ? g.lineTo(X(t), Y(v)) : g.moveTo(X(t), Y(v)))); g.stroke();
+    const mark = (f, col, hollow) => {
+      const x = X(f[0]), y = Y(f[2]), s = 5 * dpr, up = f[1] > 0;
+      g.beginPath(); if (up) { g.moveTo(x, y - s); g.lineTo(x - s, y + s); g.lineTo(x + s, y + s); } else { g.moveTo(x, y + s); g.lineTo(x - s, y - s); g.lineTo(x + s, y - s); }
+      g.closePath();
+      if (hollow) { g.strokeStyle = col; g.lineWidth = 1.5 * dpr; g.stroke(); } else { g.fillStyle = col; g.fill(); }
+    };
+    if (b) b.lg.forEach((f) => mark(f, '#ffb020', true));
+    a.lg.forEach((f) => mark(f, '#2dff7a', false));
+  }
+  async function showDuelResult(ch, o, justPlayed) {
+    // 'you' is the player who just finished (the newest result); when just viewing a finished link, A vs B
+    const c = E.CBY[ch.sym];
+    const first = o.b ? o.a : null, second = o.b || o.a;
+    const you = justPlayed || null;
+    let rows, head, kind = '';
+    const row = (nm, r, cls) => `<tr class="${cls || ''}"><td>${esc(nm)}</td><td class="mono" style="color:var(--${r.p >= 0 ? 'up' : 'down'})">${sgn(r.p)}</td><td class="mono">${r.tr}</td><td class="mono">${r.w}</td></tr>`;
+    if (o.b) {
+      const A = o.a, B = o.b, d = B.p - A.p;
+      head = d === 0 ? 'Dead heat' : `${esc(d > 0 ? B.n : A.n)} wins by ${money(Math.abs(d))}`;
+      kind = (justPlayed ? (d > 0 ? 'good' : d < 0 ? 'bad' : '') : '');
+      rows = row(A.n, A, A.p >= B.p ? 'win' : '') + row(B.n, B, B.p >= A.p ? 'win' : '');
+    } else {
+      head = 'Your score is in'; kind = o.a.p >= 0 ? 'good' : 'bad';
+      rows = row(o.a.n, o.a, '');
+    }
+    const next = !o.b && o.a ? '<p class="dim" style="font-size:12px">Send them the link. They play the same session blind, then send theirs back.</p>' : (o.a && o.b && justPlayed ? '<p class="dim" style="font-size:12px">Send the link back so they can see the scoreboard.</p>' : '');
+    const body = `<p style="font-size:12px" class="dim">${c.emoji} ${c.name} · ${dateStr(ch.day)}${o.daily ? ' · Daily Duel' : ''}</p>
+      <p style="font-size:20px;font-weight:800;margin:4px 0">${head}</p>
+      <table class="duel-t"><tr><th></th><th>P&amp;L</th><th>Fills</th><th>Wins</th></tr>${rows}</table>
+      <canvas id="duelCv" style="width:100%;height:120px;display:block;margin:8px 0 2px;background:#0008;border-radius:8px"></canvas>
+      <p class="dim" style="font-size:11px;margin:0">▲▼ solid = ${esc(o.b ? o.a.n : o.a.n)}'s fills${o.b ? ` · hollow = ${esc(o.b.n)}'s` : ''} · line = the market with nobody trading</p>${next}`;
+    const link = duelLink(o), canSend = !(o.a && o.b && !justPlayed);
+    for (;;) {
+      const pr = showModal({ kind, title: '⚔️ Duel', body, buttons: canSend ? [[o.b ? 'Send result back' : 'Send challenge link', 'primary'], ['Done', '']] : [['Done', 'primary']] });
+      setTimeout(() => { const cv = $('duelCv'); if (cv) drawDuel(cv, ch, o.a, o.b); }, 30);
+      const i = await pr;
+      if (!canSend || i !== 0) break;
+      const text = o.b ? `Duel result: ${o.a.n} vs ${o.b.n}. ${link}` : `${o.a.n} challenges you to a trading duel on ${c.name}. Beat my ${sgn(o.a.p)}. ${link}`;
+      try {
+        if (navigator.share) { await navigator.share({ title: "The Pit '90 duel", text }); break; }
+        await navigator.clipboard.writeText(text); toast('Link copied. Paste it to your friend.');
+      } catch (e) { if (e && e.name === 'AbortError') continue; window.prompt('Copy this link:', text); }
+    }
+  }
+  function checkDuelHash() {
+    const m = location.hash.match(/duel=([A-Za-z0-9_-]+)/); if (!m) return;
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+    const o = parseDuel(m[1]); if (o) setTimeout(() => startDuel(o), 400); else toast('That duel link is damaged.');
+  }
+
   // ---------- events
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('button,[data-pit],[data-train]'); if (!t) return;
+    const t = e.target.closest('button,[data-pit],[data-train],[data-duel]'); if (!t) return;
     if (t.id === 'tutExit') { if (tut) { tut.aborted = true; if (tut.waiter) { const w = tut.waiter; tut.waiter = null; w.resolve(); } if (tut.resolveCard) { const r = tut.resolveCard; tut.resolveCard = null; r(-1); } } return; }
     if (t.dataset.mute) { window.Sfx.toggle(); if (G) render(); return; }
     if (t.dataset.tab) { sfx('tap'); tab = t.dataset.tab; $('view').scrollTop = 0; render(); return; }
@@ -704,6 +846,7 @@
     }
     if (t.dataset.skip) return skip(+t.dataset.skip);
     if (t.dataset.train) return startTraining();
+    if (t.dataset.duel) return duelMenu();
     if (t.dataset.tb != null && tut) { const i = +t.dataset.tb; const r = tut.resolveCard; tut.resolveCard = null; if (r) r(i); return; }
     if (t.dataset.buy || t.dataset.sell) {
       const [cat, id] = (t.dataset.buy || t.dataset.sell).split(':');
@@ -726,12 +869,13 @@
   $('pFF').addEventListener('click', skipToClose);
   $('pPause').addEventListener('click', () => setPaused(!live.paused));
   $('pResume').addEventListener('click', () => setPaused(false));
-  $('pLeave').addEventListener('click', () => { stopTimer(); save(); if (scene) scene.stop(); if (window.Sfx) window.Sfx.roarStop(); document.body.classList.remove('live'); $('pit').classList.add('hidden'); live = null; $('app').classList.add('hidden'); $('title').classList.remove('hidden'); $('btnContinue').classList.remove('hidden'); });
+  $('pLeave').addEventListener('click', async () => { if (duel) { if (!live) return; live.modalOpen = true; stopTimer(); const i = await showModal({ kind: 'bad', title: 'Forfeit the duel?', body: '<p>Leaving now abandons this duel. Nothing is saved.</p>', buttons: [['Keep trading', 'primary'], ['Forfeit', '']] }); if (i === 1) { exitDuel(); } else { live.modalOpen = false; if (!live.paused) startTimer(); } return; } stopTimer(); save(); if (scene) scene.stop(); if (window.Sfx) window.Sfx.roarStop(); document.body.classList.remove('live'); $('pit').classList.add('hidden'); live = null; $('app').classList.add('hidden'); $('title').classList.remove('hidden'); $('btnContinue').classList.remove('hidden'); });
   $('pSpeed').addEventListener('click', () => { const SP = [0.5, 0.75, 1, 2]; live.speed = SP[(SP.indexOf(live.speed) + 1) % SP.length]; $('pSpeed').textContent = live.speed + '×'; if (!live.paused && !live.modalOpen) startTimer(); });
   $('btnBell').addEventListener('click', openBell);
   $('btnNew').addEventListener('click', newGame);
   $('btnContinue').addEventListener('click', cont);
   $('btnTrain').addEventListener('click', startTraining);
+  $('btnDuel').addEventListener('click', duelMenu);
   window.addEventListener('resize', () => { if (live) { sizeCanvas(); if (scene) scene.resize(); updateLive(); } });
   document.addEventListener('visibilitychange', () => { if (document.hidden && live && !live.paused && !live.modalOpen) setPaused(true); });
 
@@ -741,5 +885,6 @@
     window.addEventListener('resize', () => titleScene.resize());
   }
   if (load()) $('btnContinue').classList.remove('hidden');
+  checkDuelHash(); window.addEventListener('hashchange', checkDuelHash);
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();
