@@ -699,7 +699,7 @@
   const NAME_KEY = 'ws90_name';
   const b64e = (o) => btoa(unescape(encodeURIComponent(JSON.stringify(o)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   const b64d = (s) => JSON.parse(decodeURIComponent(escape(atob(s.replace(/-/g, '+').replace(/_/g, '/')))));
-  const duelLink = (o) => location.href.split('#')[0] + '#duel=' + b64e(o);
+  const duelLink = (o) => location.origin + location.pathname + '?duel=' + b64e(o); // a query string survives chat apps and in-app browsers that drop #fragments
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   function parseDuel(text) {
     try {
@@ -827,8 +827,8 @@
     }
   }
   function checkDuelHash() {
-    const m = location.hash.match(/duel=([A-Za-z0-9_-]+)/); if (!m) return;
-    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+    const m = (location.search + location.hash).match(/duel=([A-Za-z0-9_-]+)/); if (!m) return;
+    try { history.replaceState(null, '', location.pathname); } catch (e) {}
     const o = parseDuel(m[1]); if (o) setTimeout(() => startDuel(o), 400); else toast('That duel link is damaged.');
   }
 
@@ -875,7 +875,7 @@
   $('btnNew').addEventListener('click', newGame);
   $('btnContinue').addEventListener('click', cont);
   $('btnTrain').addEventListener('click', startTraining);
-  $('btnDuel').addEventListener('click', duelMenu);
+  if ($('btnDuel')) $('btnDuel').addEventListener('click', duelMenu);
   window.addEventListener('resize', () => { if (live) { sizeCanvas(); if (scene) scene.resize(); updateLive(); } });
   document.addEventListener('visibilitychange', () => { if (document.hidden && live && !live.paused && !live.modalOpen) setPaused(true); });
 
