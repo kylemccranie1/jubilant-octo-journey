@@ -455,14 +455,19 @@
   }
 
   function drawChart() {
-    const S = G.sess, c = cvs(), ctx = c.getContext('2d'), W = c.width, H = c.height, dpr = window.devicePixelRatio || 1;
+    const S = G.sess, c = cvs(), dpr = window.devicePixelRatio || 1;
+    { const r = c.getBoundingClientRect(); if (r.width > 0 && (Math.abs(c.width - r.width * dpr) > 1 || Math.abs(c.height - r.height * dpr) > 1)) sizeCanvas(); } // iOS changes the layout without a resize event: keep the bitmap matched to its box
+    const ctx = c.getContext('2d'), W = c.width, H = c.height;
     ctx.clearRect(0, 0, W, H);
     const pts = S.path.slice(Math.max(0, S.t - Math.min(150, Math.max(40, S.t))), S.t + 1);
-    let lo = Math.min(...pts), hi = Math.max(...pts);
-    if (G.pos && G.pos.sym === S.sym) { lo = Math.min(lo, G.pos.entry); hi = Math.max(hi, G.pos.entry); }
+    const recent = pts.slice(-80); // scale to the recent action: after a big move the old levels run off the edge instead of flattening everything that follows
+    let lo = Math.min(...recent), hi = Math.max(...recent);
+    // keep the entry in view only while it is near the action, otherwise a far-away entry flattens the whole chart
+    const near = (v) => v >= lo - Math.max(6, (hi - lo) * 1.5) && v <= hi + Math.max(6, (hi - lo) * 1.5);
+    if (G.pos && G.pos.sym === S.sym && near(G.pos.entry)) { lo = Math.min(lo, G.pos.entry); hi = Math.max(hi, G.pos.entry); }
     const pad = Math.max(3, (hi - lo) * 0.15); lo -= pad; hi += pad;
     const span = Math.min(150, Math.max(40, S.t)), t0 = Math.max(0, S.t - span);
-    const X = (i) => ((i - t0) / span) * W, Y = (v) => H - ((v - lo) / (hi - lo)) * H;
+    const X = (i) => ((i - t0) / span) * W, Y = (v) => H - ((v - lo) / (hi - lo)) * H, YC = (v) => Math.max(2 * dpr, Math.min(H - 2 * dpr, Y(v)));
     ctx.strokeStyle = 'rgba(70,255,140,.10)'; ctx.lineWidth = 1;
     for (let k = 1; k < 4; k++) { ctx.beginPath(); ctx.moveTo(0, H * k / 4); ctx.lineTo(W, H * k / 4); ctx.stroke(); }
     for (let k = 1; k < 6; k++) { ctx.beginPath(); ctx.moveTo(W * k / 6, 0); ctx.lineTo(W * k / 6, H); ctx.stroke(); }
@@ -475,8 +480,8 @@
     ctx.lineTo(X(base + pts.length - 1), H); ctx.lineTo(0, H); ctx.fillStyle = up ? 'rgba(45,255,122,.08)' : 'rgba(255,77,94,.08)'; ctx.fill();
     ctx.setLineDash([6 * dpr, 4 * dpr]); ctx.lineWidth = 1.5 * dpr;
     if (G.pos && G.pos.sym === S.sym) {
-      ctx.strokeStyle = '#ffb800'; ctx.beginPath(); ctx.moveTo(0, Y(G.pos.entry)); ctx.lineTo(W, Y(G.pos.entry)); ctx.stroke();
-      if (S.stop) { const sv = G.pos.entry - Math.sign(G.pos.qty) * S.stop; ctx.strokeStyle = '#ff4d5e'; ctx.beginPath(); ctx.moveTo(0, Y(sv)); ctx.lineTo(W, Y(sv)); ctx.stroke(); }
+      ctx.strokeStyle = '#ffb800'; ctx.beginPath(); ctx.moveTo(0, YC(G.pos.entry)); ctx.lineTo(W, YC(G.pos.entry)); ctx.stroke();
+      if (S.stop) { const sv = G.pos.entry - Math.sign(G.pos.qty) * S.stop; ctx.strokeStyle = '#ff4d5e'; ctx.beginPath(); ctx.moveTo(0, YC(sv)); ctx.lineTo(W, YC(sv)); ctx.stroke(); }
     }
     for (const o of S.orders) { ctx.strokeStyle = o.side > 0 ? '#2dff7a' : '#ff4d5e'; ctx.beginPath(); ctx.moveTo(W * 0.6, Y(o.price)); ctx.lineTo(W, Y(o.price)); ctx.stroke(); }
     ctx.setLineDash([]);
