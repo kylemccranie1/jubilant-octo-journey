@@ -312,6 +312,7 @@
     } else if (next === 0) G.pos = null;
     else if (Math.sign(next) === Math.sign(cur)) G.pos.qty = next;
     else G.pos = { sym: S.sym, qty: next, entry: px };
+    if (S.log && S.log.length < 120) S.log.push([S.t, side * qty, Math.round(px * 10) / 10]);
     G.cash += realized - fee; G.ytd += realized - fee;
     G.stats.realized += realized - fee; G.stats.fees += fee; G.stats.trades++; S.trades++;
     if (closeQ > 0) {
@@ -352,13 +353,13 @@
     if (G.over || G.sess) return { ok: false, msg: 'Not available.' };
     if (!c || !G.unlocked[sym]) return { ok: false, msg: 'That pit is locked.' };
     if (G.pos && G.pos.sym !== sym) return { ok: false, msg: `You're holding ${G.pos.sym}. Trade that pit to close it out.` };
-    const N = N_STEPS, per = G.today.per[sym], open = per.openT, training = !!(opts && opts.training);
+    const N = N_STEPS, per = G.today.per[sym], open = per.openT, training = !!(opts && opts.training), duel = opts && opts.duel != null ? opts.duel : null;
     const S = {
       sym, n: N, t: 0, open, target: per.closeT, sigT: Math.max(28, open * per.sig),
       bid: open, ask: open + 1, bids: {}, asks: {}, thinA: 1, thinB: 1, imb: 0, volume: 0,
       regime: { f: 0, s: 0, left: 0 }, hint: 0, burst: null, react: null, rev: null, fundJ: 0, totJ: 0,
       path: [open + 0.5], prints: [], hit: {}, notes: [], pseq: 0, last: open, flowEma: 0, stepFlow: 0, events: [], orders: [], stop: 0, done: false,
-      startEq: 0, wins: 0, trades: 0, training, scripted: !!per.scripted && !!per.text, aheadEntry: null, offer: null, makerFills: 0,
+      startEq: 0, duel, log: duel != null ? [] : null, wins: 0, trades: 0, training, scripted: !!per.scripted && !!per.text, aheadEntry: null, offer: null, makerFills: 0,
     };
     G.sess = S;
     ensureDepth(G, S, 5);
@@ -367,7 +368,7 @@
       S.events.push({ t: tEv, text: per.text, jump: J, scripted: per.scripted });
       S.totJ = J;
     }
-    if (!training && netWorth(G) >= 15000 && !G.sec && G.day - G.lastOffer >= 15 && rnd(G) < .10) {
+    if (!training && duel == null && netWorth(G) >= 15000 && !G.sec && G.day - G.lastOffer >= 15 && rnd(G) < .10) {
       const side = rnd(G) < .5 ? 1 : -1, t0 = 100 + Math.floor(rnd(G) * 250), lots = dpth0(sym) * pick(G, [3, 5, 7, 10]);
       S.offer = { t: t0, side, lots, jt: t0 + 30, bonus: Math.round(lots * CBY[sym].tickVal * 0.8), resolved: null };
       G.lastOffer = G.day;
@@ -555,6 +556,7 @@
     if (!S || S.done) return events;
     if (S.offer && !S.offer.resolved && S.t >= S.offer.t) S.offer.resolved = 'ignored';
     S.t++;
+    if (S.duel != null) G.rs = (S.duel ^ Math.imul(S.t, 0x9E3779B1)) | 0; // duel: the market's randomness depends only on the seed and the step, never on how you traded
     const t = S.t, c = CBY[S.sym];
     for (const ev of S.events) if (ev.t === t) {
       const len = Math.round(clamp(Math.abs(ev.jump) / dpth(S), 16, 40));
@@ -660,7 +662,7 @@
     // session summary
     if (S) {
       const pnl = G.cash - S.startEq;
-      G.lastSession = { sym: S.sym, pnl, trades: S.trades, wins: S.wins, fees: 0, overnight: !!G.pos, date: date.getTime() };
+      G.lastSession = { sym: S.sym, pnl, trades: S.trades, wins: S.wins, fees: 0, overnight: !!G.pos, date: date.getTime(), ...(S.log ? { log: S.log } : {}) };
       const st = G.stats;
       st.bestDay = Math.max(st.bestDay, pnl); st.worstDay = Math.min(st.worstDay, pnl);
       st.streak = pnl > 0 ? st.streak + 1 : 0;
@@ -702,6 +704,30 @@
     for (const a of checkAchievements(G)) events.push({ kind: 'ach', text: a.name, ach: a });
     if (!G.over) { prepareDay(G); makeTips(G); }
     return events;
+  }
+
+  // ---------------------------------------------------------------- seeded duels: same pit, same day, same crowd for both players
+  const DUEL_CASH = 25000;
+  function duelFromSeed(seed) {
+    const g = { rs: Math.imul((seed | 0) ^ 0x5BD1E995, 0x2C1B3C6D) }; rnd(g); rnd(g);
+    const last = Math.round((END_MS - START_MS) / 864e5 * 5 / 7) - 40;
+    const sym = CONTRACTS[Math.floor(rnd(g) * CONTRACTS.length)].sym, day = 30 + Math.floor(rnd(g) * (last - 30));
+    return { seed: seed | 0, sym, day };
+  }
+  function duelGame(ch) {
+    const G = newGame(ch.seed);
+    G.day = ch.day; G.rs = (ch.seed ^ Math.imul(ch.day, 0x85EBCA6B)) | 0;
+    for (const c of CONTRACTS) { G.mk[c.sym].close = Math.round(anchorPrice(c.sym, dateOfDay(ch.day - 1).getTime()) / c.tick); G.unlocked[c.sym] = true; }
+    G.billMonth = monthIdxOfDay(ch.day); G.cash = DUEL_CASH; G.news = []; G.tips = [];
+    prepareDay(G);
+    return G;
+  }
+
+  // the market with nobody trading in it: the backdrop for comparing two players' fills
+  function duelPath(ch) {
+    const G = duelGame(ch); startSession(G, ch.sym, { duel: ch.seed });
+    const S = G.sess; while (G.sess && !S.done) stepSession(G);
+    return S.path.slice();
   }
 
   function skipDays(G, n) {
@@ -984,7 +1010,7 @@
 
   const api = {
     START_CASH, SELL_RATIO, SAVE_VERSION, TAX_RATE, MAINT, N_STEPS, STEP_MS, CONTRACTS, CBY, HOMES, CARS, TECH, LUX, RANKS, ACH, ERA_EVENTS,
-    newGame, startSession, stepSession, CAREER, RIVALS, marginOf, feeOf, liqPrice, rankings, inflation, trade, flatten, setStop, placeLimit, cancelOrders, preview, forceRegime, inject, respondOffer, skipDays, recentFlow, flowGauge, leanSignal, leanCall, deltaBars, shoutsNow, ladder, quote,
+    newGame, duelFromSeed, duelGame, duelPath, DUEL_CASH, startSession, stepSession, CAREER, RIVALS, marginOf, feeOf, liqPrice, rankings, inflation, trade, flatten, setStop, placeLimit, cancelOrders, preview, forceRegime, inject, respondOffer, skipDays, recentFlow, flowGauge, leanSignal, leanCall, deltaBars, shoutsNow, ladder, quote,
     buyItem, sellItem, moveHome, checkAchievements,
     netWorth, equity, unreal, maxLots, marginUsed, marginLevel, markT, monthlyCosts, monthlyIncome, rankOf, livingCost,
     dateOfDay, clockOf, fmtPrice, priceOf,

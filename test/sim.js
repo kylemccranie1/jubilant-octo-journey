@@ -218,4 +218,21 @@ function fresh(seed, sym = 'SOY') { const G = E.newGame(seed); G.unlocked[sym] =
   assert(rev && rev.year === 1990 && rev.of === 7, 'year-end review');
   for (const r of E.rankings(G)) assert(Number.isFinite(r.nw) && r.nw > 0);
 }
+{ // seeded duel: same market for both players regardless of how they trade; scores are comparable
+  const run = (seed, plan) => {
+    const ch = E.duelFromSeed(seed), G = E.duelGame(ch); assert(E.startSession(G, ch.sym, { duel: ch.seed }).ok);
+    const S = G.sess; let i = 0;
+    while (G.sess && !S.done) { if (plan && i % 37 === 6) E.trade(G, (i / 37) % 2 ? 1 : -1, 2); E.stepSession(G); i++; }
+    return { ch, pnl: G.lastSession.pnl, log: S.log, offer: !!S.offer, close: S.path[S.path.length - 1] };
+  };
+  for (const seed of [11, 222, 3333, 444444]) {
+    const a = run(seed, false), a2 = run(seed, false), b = run(seed, true);
+    assert(a.ch.day >= 30 && E.CBY[a.ch.sym], 'duel challenge is valid');
+    assert(a.close === a2.close && a.pnl === a2.pnl && a.pnl === 0, 'duel session is exactly repeatable');
+    assert(b.log.length > 0 && !a.offer && !b.offer, 'fills are logged, no customer offers');
+    assert(Math.abs(b.close - a.close) <= Math.max(25, 0.01 * a.close), 'your trading barely changes where the market closes');
+  }
+  assert(E.duelPath(E.duelFromSeed(11)).length === E.N_STEPS + 1, 'duelPath covers the session');
+  const syms = new Set(); for (let sd = 20260101; sd < 20260130; sd++) syms.add(E.duelFromSeed(sd).sym); assert(syms.size >= 3, 'daily seeds rotate pits');
+}
 console.log('OK');
