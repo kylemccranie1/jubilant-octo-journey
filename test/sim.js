@@ -241,9 +241,15 @@ function fresh(seed, sym = 'SOY') { const G = E.newGame(seed); G.unlocked[sym] =
   G.car = 0; G.home = 5; G.lux = ['jet', 'rolex']; const P = E.perksOf(G);
   assert(P.shock < 0.5 && P.grace >= 5 && P.tips === 3 && E.relOf(G) > E.TECH[G.tech].rel, 'mansion + jet + rolex stack');
   for (const it of [...E.HOMES.slice(1), ...E.CARS.slice(1), ...E.LUX]) assert(it.pk && it.perk, 'every upgrade has a perk: ' + it.name);
-  G.cash = 1e6; G.tech = 0; E.skipDays(G, 1); // tips scale with perks
-  let tips = 0; for (let i = 0; i < 20; i++) { G.unlocked.CRUDE = G.unlocked.DM = G.unlocked.BOND = true; E.skipDays(G, 1); tips = Math.max(tips, G.tips.length); }
-  assert(tips >= 3, 'perk tips show up in the morning');
+  G.cash = 1e6; G.tech = 0; E.skipDays(G, 1); // call charges scale with perks
+  assert(G.callsLeft === 3, 'perk tips become call charges: ' + G.callsLeft);
+  const r1 = E.callGuy(G, 'SOY'), r2 = E.callGuy(G, 'SOY'), r3 = E.callGuy(G, 'SOY'), r4 = E.callGuy(G, 'SOY');
+  assert(r1.ok && r2.ok && r3.ok && !r4.ok && G.calls.SOY.length === 3, 'repeat calls on one pit stack, then run out');
+  assert(r1.call.news === undefined && r1.call.size === undefined, 'basic gear gives direction only');
+  const G2 = E.newGame(52); G2.tech = 5; E.skipDays(G2, 1); const c2 = E.callGuy(G2, 'SOY').call; assert('news' in c2 && c2.size, 'top gear adds timing and size');
+  { const G3 = E.newGame(53); G3.tech = 5; G3.cash = 1e9; for (const c of E.CONTRACTS) G3.unlocked[c.sym] = true; let n = 0, ok = 0;
+    for (let d = 0; d < 400; d++) { const sym = E.CONTRACTS[d % 5].sym; G3.callsLeft = 1; const per = G3.today.per[sym]; if (E.callGuy(G3, sym).call.up === (per.closeT >= per.openT)) ok++; n++; E.skipDays(G3, 1); G3.cash = 1e9; }
+    assert(ok / n > 0.8 && ok / n < 0.97, 'top-gear calls are right ~90%: ' + ok / n); }
   G.lux = []; G.home = 0; assert(E.perksOf(G).tips === 0, 'perks vanish with the items');
 }
 { // social clubs

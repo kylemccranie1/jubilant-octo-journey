@@ -91,7 +91,7 @@
       html += `<div class="card" style="border-color:var(--amber)">📌 Holding <b>${G.pos.qty > 0 ? 'LONG' : 'SHORT'} ${Math.abs(G.pos.qty)} ${c.sym}</b> @ ${fp(c.sym, G.pos.entry)} overnight · open P&amp;L <b class="${cls(u)}">${sgn(u)}</b>
         <div class="dim" style="font-size:11px;margin-top:3px">You can only open the ${c.name} pit until you're flat. Gaps at the open can hurt.</div></div>`;
     }
-    if (G.tips.length) html += '<h2>📞 Morning tips</h2>' + G.tips.map((t) => `<div class="card tip-card" style="font-size:13px">${t.text}</div>`).join('');
+    html += morningCalls();
     html += '<h2>Choose your pit</h2>';
     for (const c of E.CONTRACTS) {
       const locked = !G.unlocked[c.sym], blocked = G.pos && G.pos.sym !== c.sym;
@@ -149,6 +149,24 @@
     return html;
   }
 
+  // morning calls: spend your calls on the pits you care about; repeat calls on one pit stack as independent reads
+  function morningCalls() {
+    const calls = G.calls || {}, left = G.callsLeft || 0, made = Object.keys(calls).filter((k) => calls[k].length);
+    if (!left && !made.length && !G.tips.length) return '';
+    let h = '<h2>📞 Morning calls</h2>' + G.tips.map((t) => `<div class="card tip-card" style="font-size:13px">${t.text}</div>`).join('');
+    if (left || made.length) {
+      const chips = E.CONTRACTS.filter((c) => G.unlocked[c.sym] && !(G.pos && G.pos.sym !== c.sym)).map((c) => `<button data-callguy="${c.sym}" ${left ? '' : 'disabled'}>${c.emoji} ${c.sym}${calls[c.sym] ? ` <small>(${calls[c.sym].length})</small>` : ''}</button>`).join('');
+      h += `<div class="card" style="font-size:13px"><b>Call your guy</b> · <b>${left}</b> call${left === 1 ? '' : 's'} left today<div class="dim" style="font-size:11px;margin:3px 0 6px">Each call is an independent read on the pit you pick. Two that agree beat one. Better gear adds headline timing and the size of the day.</div><div class="chips">${chips}</div></div>`;
+      for (const sym of made) {
+        const cs = calls[sym], ups = cs.filter((c) => c.up).length, dn = cs.length - ups;
+        const lines = cs.map((c) => `📞 ${c.up ? '<span class="up">HIGHER 📈</span>' : '<span class="down">LOWER 📉</span>'}${c.news === undefined ? '' : c.news ? ` · headline ${c.news[0]}–${c.news[1]} CT` : ' · no headline'}${c.size ? ` · ${c.size} day` : ''}`).join('<br>');
+        const verdict = cs.length > 1 ? (ups === dn ? 'Split: no edge. Maybe skip it.' : `${Math.max(ups, dn)}–${Math.min(ups, dn)} for ${ups > dn ? 'HIGHER' : 'LOWER'}`) : '';
+        h += `<div class="card tip-card" style="font-size:13px"><b>${E.CBY[sym].emoji} ${E.CBY[sym].name}</b>${verdict ? ` · <b>${verdict}</b>` : ''}<div style="margin-top:3px">${lines}</div></div>`;
+      }
+    }
+    return h;
+  }
+
   function lifeCard(cat, it, state) {
     let btn = '', meta = '';
     if (cat === 'home') {
@@ -180,7 +198,7 @@
     if (P.shock < 1) pl.push(`Life shocks −${Math.round((1 - P.shock) * 100)}%`);
     if (P.grace) pl.push(`+${P.grace} notice days`);
     if (P.margin < 1) pl.push(`Margin −${Math.round((1 - P.margin) * 100)}%`);
-    if (P.tips) pl.push(`+${P.tips} morning tip${P.tips > 1 ? 's' : ''}`);
+    if (P.tips) pl.push(`+${P.tips} morning call${P.tips > 1 ? 's' : ''}`);
     if (P.rel) pl.push(`Chatter +${Math.round(P.rel * 100)}%`);
     if (P.bonus > 1) pl.push(`Customer fills +${Math.round((P.bonus - 1) * 100)}%`);
     if (P.offer > 1) pl.push(`Offers +${Math.round((P.offer - 1) * 100)}% often`);
@@ -866,6 +884,7 @@
       selSym = c.sym; sfx('tap'); render(); return;
     }
     if (t.dataset.skip) return skip(+t.dataset.skip);
+    if (t.dataset.callguy) { const r = E.callGuy(G, t.dataset.callguy); toast(r.msg); sfx(r.ok ? 'tap' : 'error'); if (r.ok) save(); render(); return; }
     if (t.dataset.train) return startTraining();
     if (t.dataset.duel) return duelMenu();
     if (t.dataset.tb != null && tut) { const i = +t.dataset.tb; const r = tut.resolveCard; tut.resolveCard = null; if (r) r(i); return; }
