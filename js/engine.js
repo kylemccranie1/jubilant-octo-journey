@@ -99,20 +99,20 @@
 
   const HOMES = [
     { id: 0, name: 'Roach-Motel Studio', emoji: '🪳', rent: 300, desc: 'Thin walls, thinner wallet. Everyone starts somewhere.' },
-    { id: 1, name: 'One-Bedroom Apartment', emoji: '🏢', rent: 800, desc: 'A real couch! And a door that locks.' },
-    { id: 2, name: 'Yuppie Condo', emoji: '🏙️', rent: 2200, desc: 'Exposed brick, answering machine, track lighting.' },
-    { id: 3, name: 'Suburban Townhouse', emoji: '🏡', rent: 5000, desc: 'Two-car garage and a lawn guy named Hector.' },
-    { id: 4, name: 'Manhattan Penthouse', emoji: '🌃', rent: 14000, desc: 'Doorman, skyline, zero regrets.' },
-    { id: 5, name: 'Hamptons Mansion', emoji: '🏰', rent: 40000, desc: 'Helipad. Wine cellar. Rival who hates you.' },
+    { id: 1, name: 'One-Bedroom Apartment', emoji: '🏢', rent: 800, desc: 'A real couch! And a door that locks.', pk: { s: .85 }, perk: 'Life shocks cost 15% less.' },
+    { id: 2, name: 'Yuppie Condo', emoji: '🏙️', rent: 2200, desc: 'Exposed brick, answering machine, track lighting.', pk: { s: .75, g: 1 }, perk: 'Life shocks −25%. +1 day on a final notice.' },
+    { id: 3, name: 'Suburban Townhouse', emoji: '🏡', rent: 5000, desc: 'Two-car garage and a lawn guy named Hector.', pk: { s: .65, g: 2, t: 1 }, perk: 'Shocks −35%. +2 notice days. Home office: +1 morning tip.' },
+    { id: 4, name: 'Manhattan Penthouse', emoji: '🌃', rent: 14000, desc: 'Doorman, skyline, zero regrets.', pk: { s: .55, g: 3, t: 1 }, perk: 'Shocks −45%. +3 notice days. +1 morning tip.' },
+    { id: 5, name: 'Hamptons Mansion', emoji: '🏰', rent: 40000, desc: 'Helipad. Wine cellar. Rival who hates you.', pk: { s: .4, g: 5, t: 1, r: .03 }, perk: 'Shocks −60%. +5 notice days. +1 tip. Chatter +3% reliable.' },
   ];
   const CARS = [
     { id: 0, name: 'Bus Pass', emoji: '🚌', price: 0, upkeep: 0, desc: 'The 14 crosstown. Smells like rain.' },
-    { id: 1, name: "'85 Honda Civic", emoji: '🚗', price: 3500, upkeep: 80, desc: 'Cassette deck, one working speaker.' },
-    { id: 2, name: 'Saab 900 Turbo', emoji: '🚙', price: 16000, upkeep: 200, desc: 'Quirky. Very 1989 yuppie.' },
-    { id: 3, name: 'BMW 535i', emoji: '🚘', price: 38000, upkeep: 350, desc: 'The ultimate power-lunch ride.' },
-    { id: 4, name: 'Porsche 911', emoji: '🏎️', price: 85000, upkeep: 700, desc: 'Red, loud, and tax-deductible (it is not).' },
-    { id: 5, name: 'Ferrari Testarossa', emoji: '🔴', price: 190000, upkeep: 1500, desc: 'Side strakes. Miami Vice approved.' },
-    { id: 6, name: 'Stretch Limo + Driver', emoji: '🛻', price: 400000, upkeep: 5000, desc: 'Moonroof for waving at peasants.' },
+    { id: 1, name: "'85 Honda Civic", emoji: '🚗', price: 3500, upkeep: 80, desc: 'Cassette deck, one working speaker.', pk: { m: .98 }, perk: 'Clearing firm margin −2%.' },
+    { id: 2, name: 'Saab 900 Turbo', emoji: '🚙', price: 16000, upkeep: 200, desc: 'Quirky. Very 1989 yuppie.', pk: { m: .95 }, perk: 'Margin −5%: the clearing firm likes the look of you.' },
+    { id: 3, name: 'BMW 535i', emoji: '🚘', price: 38000, upkeep: 350, desc: 'The ultimate power-lunch ride.', pk: { m: .92 }, perk: 'Margin −8%.' },
+    { id: 4, name: 'Porsche 911', emoji: '🏎️', price: 85000, upkeep: 700, desc: 'Red, loud, and tax-deductible (it is not).', pk: { m: .88 }, perk: 'Margin −12%.' },
+    { id: 5, name: 'Ferrari Testarossa', emoji: '🔴', price: 190000, upkeep: 1500, desc: 'Side strakes. Miami Vice approved.', pk: { m: .84 }, perk: 'Margin −16%.' },
+    { id: 6, name: 'Stretch Limo + Driver', emoji: '🛻', price: 400000, upkeep: 5000, desc: 'Moonroof for waving at peasants.', pk: { m: .8 }, perk: 'Margin −20%: you clearly have money.' },
   ];
   // Floor gear: per-side clearing fee, how truthful the pit's shouting is (rel), and daily tips
   const TECH = [
@@ -124,14 +124,27 @@
     { id: 5, name: 'Private Trading Floor', emoji: '🏛️', price: 350000, upkeep: 5000, fee: .35, rel: .90, tips: 3, desc: '$0.35/side. Chatter 90% reliable + 3 tips.' },
   ];
 
+  // Perks from homes, wheels and status symbols (gear is separate): s=life-shock cost, g=notice grace days, m=margin,
+  // b=customer-fill brokerage, o=customer-offer frequency, t=morning tips, r=chatter reliability, sec=compliance catch chance
+  function perksOf(G) {
+    const out = { shock: 1, grace: 0, margin: 1, bonus: 1, offer: 1, tips: 0, rel: 0, sec: 1 };
+    const parts = [HOMES[G.home].pk, CARS[G.car].pk]; for (const id of G.lux) parts.push(LUX.find((l) => l.id === id).pk);
+    for (const p of parts) if (p) {
+      out.shock *= p.s || 1; out.grace += p.g || 0; out.margin *= p.m || 1; out.bonus *= p.b || 1;
+      out.offer *= p.o || 1; out.tips += p.t || 0; out.rel += p.r || 0; out.sec *= p.sec || 1;
+    }
+    return out;
+  }
+  const relOf = (G) => Math.min(0.97, TECH[G.tech].rel + perksOf(G).rel);
+
   const LUX = [
-    { id: 'jacket', name: 'Members Only Jacket', emoji: '🧥', price: 250, upkeep: 0, desc: 'Epaulets and attitude.' },
-    { id: 'suit', name: 'Armani Power Suit', emoji: '🕴️', price: 3000, upkeep: 0, desc: 'Shoulder pads: structural, not optional.' },
-    { id: 'rolex', name: 'Rolex Submariner', emoji: '⌚', price: 9000, upkeep: 0, desc: 'Water-resistant to 300m of ego.' },
-    { id: 'tix', name: 'Knicks Courtside Seats', emoji: '🏀', price: 20000, upkeep: 100, desc: 'Spike Lee is two seats down.' },
-    { id: 'art', name: 'Neo-Expressionist Painting', emoji: '🖼️', price: 120000, upkeep: 0, desc: "Nobody knows what it means. That's the point." },
-    { id: 'yacht', name: 'Sailboat', emoji: '⛵', price: 90000, upkeep: 600, desc: 'Name it something punny.' },
-    { id: 'jet', name: 'Private Jet Share', emoji: '🛩️', price: 600000, upkeep: 6000, desc: 'Lunch in Aspen. Back for the close.' },
+    { id: 'jacket', name: 'Members Only Jacket', emoji: '🧥', price: 250, upkeep: 0, desc: 'Epaulets and attitude.', pk: { r: .03 }, perk: 'Pit chatter +3% reliable: the crowd takes you seriously.' },
+    { id: 'suit', name: 'Armani Power Suit', emoji: '🕴️', price: 3000, upkeep: 0, desc: 'Shoulder pads: structural, not optional.', pk: { b: 1.3 }, perk: 'Customer fills pay +30% brokerage.' },
+    { id: 'rolex', name: 'Rolex Submariner', emoji: '⌚', price: 9000, upkeep: 0, desc: 'Water-resistant to 300m of ego.', pk: { t: 1 }, perk: '+1 morning tip.' },
+    { id: 'tix', name: 'Knicks Courtside Seats', emoji: '🏀', price: 20000, upkeep: 100, desc: 'Spike Lee is two seats down.', pk: { o: 1.6 }, perk: 'Customer order offers come 60% more often.' },
+    { id: 'art', name: 'Neo-Expressionist Painting', emoji: '🖼️', price: 120000, upkeep: 0, desc: "Nobody knows what it means. That's the point.", pk: { sec: .5 }, perk: 'Well-connected: compliance is half as likely to catch you.' },
+    { id: 'yacht', name: 'Sailboat', emoji: '⛵', price: 90000, upkeep: 600, desc: 'Name it something punny.', pk: { s: .85, g: 2 }, perk: 'Life shocks −15%. +2 notice days.' },
+    { id: 'jet', name: 'Private Jet Share', emoji: '🛩️', price: 600000, upkeep: 6000, desc: 'Lunch in Aspen. Back for the close.', pk: { t: 1, r: .04 }, perk: '+1 tip. Chatter +4% reliable.' },
   ];
 
   // Career ladder: net worth earns a better badge (more pits, better terms) — but badges carry monthly dues,
@@ -229,10 +242,10 @@
     const tier = TECH[G.tech];
     const syms = CONTRACTS.filter((c) => G.unlocked[c.sym]).map((c) => c.sym);
     const used = new Set();
-    for (let i = 0; i < tier.tips && syms.length; i++) {
+    for (let i = 0; i < tier.tips + perksOf(G).tips && syms.length; i++) {
       const sym = pick(G, syms); if (used.has(sym)) continue; used.add(sym);
       const per = G.today.per[sym], truth = per.closeT >= per.openT;
-      const up = rnd(G) < tier.rel ? truth : !truth;
+      const up = rnd(G) < relOf(G) ? truth : !truth;
       G.tips.push({ sym, up, text: `Your guy on the floor says ${CBY[sym].name} ${up ? 'closes HIGHER 📈' : 'closes LOWER 📉'} today.` });
     }
   }
@@ -337,7 +350,7 @@
   };
   function unreal(G) { return G.pos ? (markT(G) - G.pos.entry) * G.pos.qty * CBY[G.pos.sym].tickVal : 0; }
   const equity = (G) => G.cash + unreal(G);
-  const marginOf = (G, sym) => Math.round(CBY[sym].margin * CAREER[G.level || 0].marginK);
+  const marginOf = (G, sym) => Math.round(CBY[sym].margin * CAREER[G.level || 0].marginK * ((CARS[G.car].pk || {}).m || 1));
   const feeOf = (G) => TECH[G.tech].fee * CAREER[G.level || 0].feeK;
   const maxLots = (G, sym) => Math.max(0, Math.floor(equity(G) / marginOf(G, sym) + 1e-9));
   // price (in ticks) at which the clearing firm would liquidate the open position
@@ -368,9 +381,9 @@
       S.events.push({ t: tEv, text: per.text, jump: J, scripted: per.scripted });
       S.totJ = J;
     }
-    if (!training && duel == null && netWorth(G) >= 15000 && !G.sec && G.day - G.lastOffer >= 15 && rnd(G) < .10) {
+    if (!training && duel == null && netWorth(G) >= 15000 && !G.sec && G.day - G.lastOffer >= 15 && rnd(G) < .10 * perksOf(G).offer) {
       const side = rnd(G) < .5 ? 1 : -1, t0 = 100 + Math.floor(rnd(G) * 250), lots = dpth0(sym) * pick(G, [3, 5, 7, 10]);
-      S.offer = { t: t0, side, lots, jt: t0 + 30, bonus: Math.round(lots * CBY[sym].tickVal * 0.8), resolved: null };
+      S.offer = { t: t0, side, lots, jt: t0 + 30, bonus: Math.round(lots * CBY[sym].tickVal * 0.8 * perksOf(G).bonus), resolved: null };
       G.lastOffer = G.day;
     }
     S.startEq = equity(G);
@@ -506,7 +519,7 @@
   function newRegime(G, S) {
     const len = 14 + Math.floor(rnd(G) * 46), r = rnd(G), f = r < .2 ? 0 : (r < .6 ? 1 : -1), s = .4 + .6 * rnd(G);
     S.regime = { f, s, left: len };
-    S.hint = rnd(G) < TECH[G.tech].rel ? f : (rnd(G) < .5 ? 1 : -1);
+    S.hint = rnd(G) < relOf(G) ? f : (rnd(G) < .5 ? 1 : -1);
   }
 
   function replenish(G, S) {
@@ -629,7 +642,7 @@
     const gain = (midOf(S) - a.px) * o.side * a.qty * CBY[S.sym].tickVal;
     if (gain > 0) {
       G.flags.frontWin = true;
-      const p = .25 + .2 * (G.heat - 1);
+      const p = (.25 + .2 * (G.heat - 1)) * perksOf(G).sec;
       if (rnd(G) < p) G.sec = { at: G.day + 10 + Math.floor(rnd(G) * 20), profit: gain, warned: false };
       const text = `Front-running paid off: ~${money(gain)} on the customer's order. Hope the exchange compliance guys weren't watching…`;
       addNews(G, 'life', text); events.push({ kind: 'insider', text });
@@ -784,7 +797,7 @@
       ['Your brother-in-law needs a "short-term loan" for his bar. You never see it again.', Math.round(Math.max(400, Math.min(Math.max(G.cash, 0), 20000) * 0.06))],
     ];
     if (G.car > 0) opts.push([`The ${CARS[G.car].name} needs a major repair.`, Math.round(Math.max(300, CARS[G.car].price * 0.05))]);
-    const [text, amount] = pick(G, opts);
+    const [text, amt] = pick(G, opts), amount = Math.round(amt * perksOf(G).shock);
     return { text, amount };
   }
 
@@ -816,8 +829,8 @@
     }
     const need = monthlyCosts(G) - monthlyIncome(G) + tax + shockAmt;
     if (G.cash < need) { // can't cover it: final notice, you get a few trading days to raise the money
-      G.notice = { issued: G.day, due: G.day + NOTICE_DAYS, need: Math.round(need), tax, shock: shockAmt };
-      const text = `FINAL NOTICE: ${money(need)} is due and your account is ${money(need - G.cash)} short. Raise it within ${NOTICE_DAYS} trading days, or the repo man starts collecting.`;
+      G.notice = { issued: G.day, due: G.day + NOTICE_DAYS + perksOf(G).grace, need: Math.round(need), tax, shock: shockAmt };
+      const text = `FINAL NOTICE: ${money(need)} is due and your account is ${money(need - G.cash)} short. Raise it within ${NOTICE_DAYS + perksOf(G).grace} trading days, or the repo man starts collecting.`;
       addNews(G, 'life', text); events.push({ kind: 'notice', text });
       return;
     }
@@ -1010,7 +1023,7 @@
 
   const api = {
     START_CASH, SELL_RATIO, SAVE_VERSION, TAX_RATE, MAINT, N_STEPS, STEP_MS, CONTRACTS, CBY, HOMES, CARS, TECH, LUX, RANKS, ACH, ERA_EVENTS,
-    newGame, duelFromSeed, duelGame, duelPath, DUEL_CASH, startSession, stepSession, CAREER, RIVALS, marginOf, feeOf, liqPrice, rankings, inflation, trade, flatten, setStop, placeLimit, cancelOrders, preview, forceRegime, inject, respondOffer, skipDays, recentFlow, flowGauge, leanSignal, leanCall, deltaBars, shoutsNow, ladder, quote,
+    newGame, perksOf, relOf, duelFromSeed, duelGame, duelPath, DUEL_CASH, startSession, stepSession, CAREER, RIVALS, marginOf, feeOf, liqPrice, rankings, inflation, trade, flatten, setStop, placeLimit, cancelOrders, preview, forceRegime, inject, respondOffer, skipDays, recentFlow, flowGauge, leanSignal, leanCall, deltaBars, shoutsNow, ladder, quote,
     buyItem, sellItem, moveHome, checkAchievements,
     netWorth, equity, unreal, maxLots, marginUsed, marginLevel, markT, monthlyCosts, monthlyIncome, rankOf, livingCost,
     dateOfDay, clockOf, fmtPrice, priceOf,

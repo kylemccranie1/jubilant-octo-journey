@@ -235,4 +235,15 @@ function fresh(seed, sym = 'SOY') { const G = E.newGame(seed); G.unlocked[sym] =
   assert(E.duelPath(E.duelFromSeed(11)).length === E.N_STEPS + 1, 'duelPath covers the session');
   const syms = new Set(); for (let sd = 20260101; sd < 20260130; sd++) syms.add(E.duelFromSeed(sd).sym); assert(syms.size >= 3, 'daily seeds rotate pits');
 }
+{ // perks from homes, wheels and status symbols
+  const G = E.newGame(51); const base = E.perksOf(G); assert(base.shock === 1 && base.tips === 0 && base.margin === 1, 'no perks to start');
+  const m0 = E.marginOf(G, 'SOY'); G.car = 6; assert(E.marginOf(G, 'SOY') < m0, 'car lowers margin');
+  G.car = 0; G.home = 5; G.lux = ['jet', 'rolex']; const P = E.perksOf(G);
+  assert(P.shock < 0.5 && P.grace >= 5 && P.tips === 3 && E.relOf(G) > E.TECH[G.tech].rel, 'mansion + jet + rolex stack');
+  for (const it of [...E.HOMES.slice(1), ...E.CARS.slice(1), ...E.LUX]) assert(it.pk && it.perk, 'every upgrade has a perk: ' + it.name);
+  G.cash = 1e6; G.tech = 0; E.skipDays(G, 1); // tips scale with perks
+  let tips = 0; for (let i = 0; i < 20; i++) { G.unlocked.CRUDE = G.unlocked.DM = G.unlocked.BOND = true; E.skipDays(G, 1); tips = Math.max(tips, G.tips.length); }
+  assert(tips >= 3, 'perk tips show up in the morning');
+  G.lux = []; G.home = 0; assert(E.perksOf(G).tips === 0, 'perks vanish with the items');
+}
 console.log('OK');

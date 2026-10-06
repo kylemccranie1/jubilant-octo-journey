@@ -197,3 +197,5 @@ button.big2{padding:10px 0;font-size:20px;min-height:54px}
 .banner{top:190px!important}@media (max-height:700px){.banner{top:166px!important}}
 
 .duel-t{width:100%;border-collapse:collapse;font-size:13px}.duel-t th{font-weight:600;color:var(--dim);text-align:right;font-size:11px;padding:2px 4px}.duel-t th:first-child,.duel-t td:first-child{text-align:left}.duel-t td{padding:4px;text-align:right;border-top:1px solid var(--line)}.duel-t tr.win td:first-child{color:var(--amber);font-weight:800}.duel-t tr.win td:first-child::before{content:'🏆 '}
+
+.perk{font-size:11px;color:var(--dim);margin-top:2px}.perk.on{color:var(--amber);font-weight:700}
