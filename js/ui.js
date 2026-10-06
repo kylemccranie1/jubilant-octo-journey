@@ -91,7 +91,7 @@
       html += `<div class="card" style="border-color:var(--amber)">📌 Holding <b>${G.pos.qty > 0 ? 'LONG' : 'SHORT'} ${Math.abs(G.pos.qty)} ${c.sym}</b> @ ${fp(c.sym, G.pos.entry)} overnight · open P&amp;L <b class="${cls(u)}">${sgn(u)}</b>
         <div class="dim" style="font-size:11px;margin-top:3px">You can only open the ${c.name} pit until you're flat. Gaps at the open can hurt.</div></div>`;
     }
-    if (G.tips.length) html += '<h2>📞 Morning tips</h2>' + G.tips.map((t) => `<div class="card tip-card" style="font-size:13px">${t.text}</div>`).join('');
+    html += morningCalls();
     html += '<h2>Choose your pit</h2>';
     for (const c of E.CONTRACTS) {
       const locked = !G.unlocked[c.sym], blocked = G.pos && G.pos.sym !== c.sym;
@@ -149,12 +149,34 @@
     return html;
   }
 
+  // morning calls: spend your calls on the pits you care about; repeat calls on one pit stack as independent reads
+  function morningCalls() {
+    const calls = G.calls || {}, left = G.callsLeft || 0, made = Object.keys(calls).filter((k) => calls[k].length);
+    if (!left && !made.length && !G.tips.length) return '';
+    let h = '<h2>📞 Morning calls</h2>' + G.tips.map((t) => `<div class="card tip-card" style="font-size:13px">${t.text}</div>`).join('');
+    if (left || made.length) {
+      const chips = E.CONTRACTS.filter((c) => G.unlocked[c.sym] && !(G.pos && G.pos.sym !== c.sym)).map((c) => `<button data-callguy="${c.sym}" ${left ? '' : 'disabled'}>${c.emoji} ${c.sym}${calls[c.sym] ? ` <small>(${calls[c.sym].length})</small>` : ''}</button>`).join('');
+      h += `<div class="card" style="font-size:13px"><b>Call your guy</b> · <b>${left}</b> call${left === 1 ? '' : 's'} left today<div class="dim" style="font-size:11px;margin:3px 0 6px">Each call is an independent read on the pit you pick. Two that agree beat one. Better gear adds headline timing and the size of the day.</div><div class="chips">${chips}</div></div>`;
+      for (const sym of made) {
+        const cs = calls[sym], ups = cs.filter((c) => c.up).length, dn = cs.length - ups;
+        const lines = cs.map((c) => `📞 ${c.up ? '<span class="up">HIGHER 📈</span>' : '<span class="down">LOWER 📉</span>'}${c.news === undefined ? '' : c.news ? ` · headline ${c.news[0]}–${c.news[1]} CT` : ' · no headline'}${c.size ? ` · ${c.size} day` : ''}`).join('<br>');
+        const verdict = cs.length > 1 ? (ups === dn ? 'Split: no edge. Maybe skip it.' : `${Math.max(ups, dn)}–${Math.min(ups, dn)} for ${ups > dn ? 'HIGHER' : 'LOWER'}`) : '';
+        h += `<div class="card tip-card" style="font-size:13px"><b>${E.CBY[sym].emoji} ${E.CBY[sym].name}</b>${verdict ? ` · <b>${verdict}</b>` : ''}<div style="margin-top:3px">${lines}</div></div>`;
+      }
+    }
+    return h;
+  }
+
   function lifeCard(cat, it, state) {
     let btn = '', meta = '';
     if (cat === 'home') {
       meta = `Rent ${money(it.rent)}/mo`;
       if (state === 'cur') btn = '<span class="tag">LIVING HERE</span>';
       else btn = `<button class="${it.id > G.home ? 'primary' : ''}" data-buy="home:${it.id}">${it.id > G.home ? 'Move in<br><small>' + money(it.rent * 2) + ' deposit</small>' : 'Downsize'}</button>`;
+    } else if (cat === 'club') {
+      const mem = (G.clubs || []).includes(it.id), ok = (G.level || 0) >= it.lvl;
+      meta = `Join ${money(it.price)} · dues ${money(it.upkeep)}/mo${it.lvl ? ' · ' + E.CAREER[it.lvl].title + '+' : ''}`;
+      btn = mem ? `<button data-sell="club:${it.id}">Resign</button>` : (ok ? `<button class="primary" data-buy="club:${it.id}">Join</button>` : `<span class="tag">${E.CAREER[it.lvl].title}+</span>`);
     } else if (cat === 'lux') {
       meta = `${money(it.price)}${it.upkeep ? ' · ' + money(it.upkeep) + '/mo upkeep' : ''}`;
       btn = G.lux.includes(it.id) ? `<button data-sell="lux:${it.id}">Sell<br><small>${money(it.price * E.SELL_RATIO)}</small></button>` : `<button class="primary" data-buy="lux:${it.id}">Buy</button>`;
@@ -164,7 +186,7 @@
       if (state === 'cur') btn = it.price ? `<button data-sell="${cat}:0">Sell<br><small>${money(it.price * E.SELL_RATIO)}</small></button>` : '<span class="tag">CURRENT</span>';
       else if (it.id > G[cat]) btn = `<button class="primary" data-buy="${cat}:${it.id}">Upgrade<br><small>${money(it.price - E.SELL_RATIO * list[G[cat]].price)}</small></button>`;
     }
-    const owned = state === 'cur' || (cat === 'lux' && G.lux.includes(it.id));
+    const owned = state === 'cur' || (cat === 'lux' && G.lux.includes(it.id)) || (cat === 'club' && (G.clubs || []).includes(it.id));
     return `<div class="card item row ${owned ? 'cur' : ''}"><div class="emoji">${it.emoji}</div>
       <div class="grow"><div class="title">${it.name}</div><div class="desc">${it.desc}</div>${it.perk && cat !== 'tech' ? `<div class="perk ${owned ? 'on' : ''}">✨ ${it.perk}</div>` : ''}<div class="meta">${meta}</div></div>${btn}</div>`;
   }
@@ -176,15 +198,17 @@
     if (P.shock < 1) pl.push(`Life shocks −${Math.round((1 - P.shock) * 100)}%`);
     if (P.grace) pl.push(`+${P.grace} notice days`);
     if (P.margin < 1) pl.push(`Margin −${Math.round((1 - P.margin) * 100)}%`);
-    if (P.tips) pl.push(`+${P.tips} morning tip${P.tips > 1 ? 's' : ''}`);
+    if (P.tips) pl.push(`+${P.tips} morning call${P.tips > 1 ? 's' : ''}`);
     if (P.rel) pl.push(`Chatter +${Math.round(P.rel * 100)}%`);
     if (P.bonus > 1) pl.push(`Customer fills +${Math.round((P.bonus - 1) * 100)}%`);
     if (P.offer > 1) pl.push(`Offers +${Math.round((P.offer - 1) * 100)}% often`);
+    if (P.whispers) pl.push(`${P.whispers} headline whisper${P.whispers > 1 ? 's' : ''} (${Math.round(P.wacc * 100)}% right)`);
     if (P.sec < 1) pl.push(`Compliance catch −${Math.round((1 - P.sec) * 100)}%`);
-    html += `<div class="card" style="font-size:12px;margin-top:6px">✨ <b>Active perks</b> (home, wheels, status symbols): ${pl.length ? pl.join(' · ') : '<span class="dim">none yet. Buy something nice.</span>'}</div>`;
+    html += `<div class="card" style="font-size:12px;margin-top:6px">✨ <b>Active perks</b> (home, wheels, clubs, status symbols): ${pl.length ? pl.join(' · ') : '<span class="dim">none yet. Buy something nice.</span>'}</div>`;
     html += '<h2>🏠 Home</h2>' + E.HOMES.map((h) => lifeCard('home', h, h.id === G.home ? 'cur' : 'buy')).join('');
     html += '<h2>🚗 Wheels</h2>' + E.CARS.map((c) => lifeCard('car', c, c.id === G.car ? 'cur' : 'buy')).join('');
     html += '<h2>📟 Floor gear</h2>' + E.TECH.map((c) => lifeCard('tech', c, c.id === G.tech ? 'cur' : 'buy')).join('');
+    html += '<h2>🍸 Social clubs</h2><div class="dim" style="font-size:11px;margin:-4px 2px 6px">Join fees are never refunded and dues keep coming. Fall behind on bills and your memberships lapse first.</div>' + E.CLUBS.map((c) => lifeCard('club', c, 'buy')).join('');
     html += '<h2>💎 Status symbols</h2>' + E.LUX.map((c) => lifeCard('lux', c, 'buy')).join('');
     return html;
   }
@@ -860,12 +884,13 @@
       selSym = c.sym; sfx('tap'); render(); return;
     }
     if (t.dataset.skip) return skip(+t.dataset.skip);
+    if (t.dataset.callguy) { const r = E.callGuy(G, t.dataset.callguy); toast(r.msg); sfx(r.ok ? 'tap' : 'error'); if (r.ok) save(); render(); return; }
     if (t.dataset.train) return startTraining();
     if (t.dataset.duel) return duelMenu();
     if (t.dataset.tb != null && tut) { const i = +t.dataset.tb; const r = tut.resolveCard; tut.resolveCard = null; if (r) r(i); return; }
     if (t.dataset.buy || t.dataset.sell) {
       const [cat, id] = (t.dataset.buy || t.dataset.sell).split(':');
-      const key = cat === 'lux' ? id : +id;
+      const key = (cat === 'lux' || cat === 'club') ? id : +id;
       const r = t.dataset.buy ? E.buyItem(G, cat, key) : E.sellItem(G, cat, key);
       toast(r.msg); sfx(r.ok ? 'buy' : 'error'); if (r.ok) { buzz(20); noteAch(E.checkAchievements(G)); save(); } render(); return;
     }

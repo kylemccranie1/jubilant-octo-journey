@@ -241,9 +241,27 @@ function fresh(seed, sym = 'SOY') { const G = E.newGame(seed); G.unlocked[sym] =
   G.car = 0; G.home = 5; G.lux = ['jet', 'rolex']; const P = E.perksOf(G);
   assert(P.shock < 0.5 && P.grace >= 5 && P.tips === 3 && E.relOf(G) > E.TECH[G.tech].rel, 'mansion + jet + rolex stack');
   for (const it of [...E.HOMES.slice(1), ...E.CARS.slice(1), ...E.LUX]) assert(it.pk && it.perk, 'every upgrade has a perk: ' + it.name);
-  G.cash = 1e6; G.tech = 0; E.skipDays(G, 1); // tips scale with perks
-  let tips = 0; for (let i = 0; i < 20; i++) { G.unlocked.CRUDE = G.unlocked.DM = G.unlocked.BOND = true; E.skipDays(G, 1); tips = Math.max(tips, G.tips.length); }
-  assert(tips >= 3, 'perk tips show up in the morning');
+  G.cash = 1e6; G.tech = 0; E.skipDays(G, 1); // call charges scale with perks
+  assert(G.callsLeft === 3, 'perk tips become call charges: ' + G.callsLeft);
+  const r1 = E.callGuy(G, 'SOY'), r2 = E.callGuy(G, 'SOY'), r3 = E.callGuy(G, 'SOY'), r4 = E.callGuy(G, 'SOY');
+  assert(r1.ok && r2.ok && r3.ok && !r4.ok && G.calls.SOY.length === 3, 'repeat calls on one pit stack, then run out');
+  assert(r1.call.news === undefined && r1.call.size === undefined, 'basic gear gives direction only');
+  const G2 = E.newGame(52); G2.tech = 5; E.skipDays(G2, 1); const c2 = E.callGuy(G2, 'SOY').call; assert('news' in c2 && c2.size, 'top gear adds timing and size');
+  { const G3 = E.newGame(53); G3.tech = 5; G3.cash = 1e9; for (const c of E.CONTRACTS) G3.unlocked[c.sym] = true; let n = 0, ok = 0;
+    for (let d = 0; d < 400; d++) { const sym = E.CONTRACTS[d % 5].sym; G3.callsLeft = 1; const per = G3.today.per[sym]; if (E.callGuy(G3, sym).call.up === (per.closeT >= per.openT)) ok++; n++; E.skipDays(G3, 1); G3.cash = 1e9; }
+    assert(ok / n > 0.8 && ok / n < 0.97, 'top-gear calls are right ~90%: ' + ok / n); }
   G.lux = []; G.home = 0; assert(E.perksOf(G).tips === 0, 'perks vanish with the items');
+}
+{ // social clubs
+  const G = E.newGame(61); G.cash = 5e5;
+  assert(E.buyItem(G, 'club', 'union').ok === false, 'rank gate');
+  G.level = 1; const c0 = E.monthlyCosts(G), nw0 = E.netWorth(G); assert(E.buyItem(G, 'club', 'union').ok && E.perksOf(G).whispers === 1, 'join');
+  assert(E.monthlyCosts(G) === c0 + 500 && E.netWorth(G) <= nw0 - 15000 + 1, 'dues charged, fee not an asset');
+  assert(E.buyItem(G, 'club', 'union').ok === false, 'no double join');
+  let w = 0, ok = 0, n = 0; for (const c of E.CONTRACTS) G.unlocked[c.sym] = true;
+  for (let d = 0; d < 300 && !G.over; d++) { for (const t of G.tips) if (t.whisper && t.sym) { n++; if ((G.today.per[t.sym].shock > 0) === t.up) ok++; } E.skipDays(G, 1); G.cash = Math.max(G.cash, 5e5); }
+  assert(n > 20 && ok / n > 0.55 && ok / n < 0.9, 'whispers are right most, not all, of the time: ' + ok + '/' + n);
+  G.cash = 100; G.clubs = ['union', 'gym']; const msgs = []; // repo drops memberships first
+  const need = () => 10000; G.cash = 100; E.sellItem(G, 'club', 'gym'); assert(G.clubs.length === 1 && E.sellItem(G, 'club', 'union').ok && G.clubs.length === 0 && G.cash === 100, 'resign refunds nothing');
 }
 console.log('OK');
