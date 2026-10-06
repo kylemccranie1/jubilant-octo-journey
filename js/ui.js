@@ -20,6 +20,7 @@
   const buzz = (ms) => { try { navigator.vibrate && navigator.vibrate(ms); } catch (e) {} };
   const money = (n, d = 0) => (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
   const sgn = (n) => (n >= 0 ? '+' : '-') + '$' + Math.abs(Math.round(n)).toLocaleString('en-US');
+  const plural = (n, w, ws) => `${n} ${n === 1 ? w : (ws || w + 's')}`;
   const big = (n) => Math.abs(n) >= 1e6 ? (n < 0 ? '-' : '') + '$' + (Math.abs(n) / 1e6).toFixed(2) + 'M' : money(n);
   const pct = (x) => (x >= 0 ? '+' : '') + (x * 100).toFixed(2) + '%';
   const dateStr = (day) => { const d = E.dateOfDay(day); return `${DOWS[d.getUTCDay()]} ${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`; };
@@ -101,7 +102,7 @@
         <div class="grow"><div class="title">${c.name} <span class="tag">${c.sym}</span></div>
           <div class="desc">${c.pit}</div>
           <div class="meta">${locked ? `🔒 Unlocks at ${big(c.unlock)} net worth` : `Last ${fp(c.sym, closeT)} · ${money(c.tickVal, 2)}/tick · ${money(E.marginOf(G, c.sym))} margin/lot`}</div></div>
-        ${locked || blocked ? '' : `<span class="tag">max ${E.maxLots(G, c.sym)} lots</span>`}</div>`;
+        ${locked || blocked ? '' : `<span class="tag">max ${plural(E.maxLots(G, c.sym), 'lot')}</span>`}</div>`;
     }
     html += `<div class="card tip-card row tap" data-train="1"><div class="grow" style="font-size:13px">🎓 <b>Training Floor</b>: a 2-minute interactive lesson on reading order flow.</div><span>›</span></div>`;
     html += `<div class="card tip-card row tap" data-duel="1"><div class="grow" style="font-size:13px">⚔️ <b>Seeded Duel</b>: same pit, same day, same crowd. Beat a friend's P&amp;L.</div><span>›</span></div>`;
@@ -117,7 +118,7 @@
     const nextPit = nx ? E.CONTRACTS.filter((c) => c.unlock > cr.nw && c.unlock <= nx.nw).map((c) => c.name).join(', ') : '';
     const floor = Math.round(cr.nw * 0.6);
     return `<div class="card career"><div class="row"><div class="emoji">🏅</div><div class="grow"><div class="title">${cr.title}</div><div class="desc">${cr.perk}</div></div>
-      <div class="px"><div class="p">${cr.dues ? money(Math.round(cr.dues * infl)) : 'No'}</div><div class="c dim">dues/mo</div></div></div>
+      <div class="px"><div class="p">${cr.dues ? money(Math.round(cr.dues * infl)) : '$0'}</div><div class="c dim">dues/mo</div></div></div>
       ${nx ? `<div class="prog"><i style="width:${(prog * 100).toFixed(0)}%"></i></div><div class="desc">Next: <b>${nx.title}</b> at ${big(nx.nw)} net worth${nextPit ? ' (opens ' + nextPit + ')' : ''} · dues ${money(Math.round(nx.dues * infl))}/mo</div>` : '<div class="desc">You are at the top of the ladder.</div>'}
       ${G.level > 0 ? `<div class="desc ${nw < floor * 1.3 ? 'down' : ''}">Keep net worth above <b>${big(floor)}</b> or the exchange pulls your badge${G.career.low ? ` (${G.career.low}/20 days below)` : ''}.</div>` : ''}</div>`;
   }
@@ -132,7 +133,7 @@
       <div class="stat"><small>Fees paid</small><b>${money(s.fees)}</b></div>
       <div class="stat"><small>Sessions · fills</small><b>${s.sessions} · ${s.trades}</b></div>
       <div class="stat"><small>Win rate</small><b>${wr}</b></div>
-      <div class="stat"><small>Best / worst session</small><b><span class="up">${sgn(s.bestDay)}</span> / <span class="down">${sgn(s.worstDay)}</span></b></div>
+      <div class="stat"><small>Best / worst session</small><b>${s.sessions ? `<span class="up">${sgn(s.bestDay)}</span> / <span class="down">${sgn(s.worstDay)}</span>` : '—'}</b></div>
       <div class="stat"><small>Win streak</small><b>${s.streak}</b></div>
       <div class="stat"><small>Gains this year</small><b class="${cls(G.ytd)}">${big(G.ytd)}</b></div>
       <div class="stat"><small>Tax due (Apr)</small><b>${G.taxDue > 0 ? money(G.taxDue) : money(Math.max(0, G.ytd) * E.TAX_RATE) + ' est.'}</b></div></div>`;
@@ -140,10 +141,10 @@
     if (G.heat) html += `<div class="card" style="margin-top:6px;font-size:12px">🕵️ Compliance heat: <b>${'🔥'.repeat(G.heat)}</b>${G.fined ? ' · <span class="down">Already fined — next time is prison</span>' : ''}</div>`;
     if (G.lastSession) {
       const l = G.lastSession;
-      html += `<h2>Last session</h2><div class="card">${E.CBY[l.sym].emoji} ${l.sym} · <b class="${cls(l.pnl)}">${sgn(l.pnl)}</b> · ${l.trades} fills, ${l.wins} winning round trips</div>`;
+      html += `<h2>Last session</h2><div class="card">${E.CBY[l.sym].emoji} ${l.sym} · <b class="${cls(l.pnl)}">${sgn(l.pnl)}</b> · ${plural(l.trades, 'fill')}, ${plural(l.wins, 'winning round trip')}</div>`;
     }
     const yrNow = nw - G.yr.nw0;
-    html += `<h2>${G.yr.year} so far</h2><div class="card" style="font-size:13px">Net worth <b class="${cls(yrNow)}">${sgn(yrNow)}</b> this year · ${G.yr.sessions} sessions · best <b class="up">${sgn(G.yr.best)}</b> · worst <b class="down">${sgn(G.yr.worst)}</b></div>`;
+    html += `<h2>${G.yr.year} so far</h2><div class="card" style="font-size:13px">Net worth <b class="${cls(yrNow)}">${sgn(yrNow)}</b> this year · ${plural(G.yr.sessions, 'session')}${G.yr.sessions ? ` · best <b class="up">${sgn(G.yr.best)}</b> · worst <b class="down">${sgn(G.yr.worst)}</b>` : ''}</div>`;
     html += '<h2>🏁 Floor standings</h2>' + E.rankings(G).map((r) => `<div class="card row ${r.you ? 'cur' : ''}" style="padding:7px 10px"><div class="mono" style="width:22px;color:var(--dim)">${r.rank}</div><div class="grow"><div class="title" style="font-size:14px">${r.you ? '⭐ ' : ''}${r.name}${r.broke ? ' <span class="tag">💥 wiped out</span>' : ''}</div><div class="desc">${r.tag}</div></div><div class="px"><div class="p">${big(r.nw)}</div></div></div>`).join('');
     html += `<h2>Net worth history</h2><div class="card">${lineChart(G.nwHist.slice(-260))}</div>`;
     return html;
@@ -254,7 +255,7 @@
         await showModal({
           kind: s.pnl >= 0 ? 'good' : 'bad', title: '🔔 Closing bell',
           body: `<p class="mono" style="font-size:30px;margin:4px 0;color:var(--${s.pnl >= 0 ? 'up' : 'down'})">${sgn(s.pnl)}</p>
-            <p>${c.name} · ${s.trades} fills · ${s.wins} winning round trips</p>${s.overnight ? '<p class="dim">You\'re holding a position overnight.</p>' : ''}`,
+            <p>${c.name} · ${plural(s.trades, 'fill')} · ${plural(s.wins, 'winning round trip')}</p>${s.overnight ? '<p class="dim">You\'re holding a position overnight.</p>' : ''}`,
         });
       } else if (e.kind === 'review') {
         const r = e.review, up = r.pnl >= 0;
@@ -262,7 +263,7 @@
         await showModal({ kind: up ? 'good' : 'bad', title: `📋 ${r.year} ${r.final ? 'final ' : ''}review`,
           body: `<p class="mono" style="font-size:24px;margin:2px 0;color:var(--${up ? 'up' : 'down'})">${sgn(r.pnl)}</p><p>${big(r.nw0)} → <b>${big(r.nw1)}</b></p>
             <p>You finished <b>#${r.rank} of ${r.of}</b> on the floor as a <b>${r.title}</b>.${r.leader ? `<br><span class="dim" style="font-size:12px">Leader: ${r.leader.name} (${big(r.leader.nw)})</span>` : ''}</p>
-            <p class="dim mono" style="font-size:12px">${r.sessions} sessions · best ${sgn(r.best)} · worst ${sgn(r.worst)}</p>` });
+            <p class="dim mono" style="font-size:12px">${plural(r.sessions, 'session')} · best ${sgn(r.best)} · worst ${sgn(r.worst)}</p>` });
       } else if (MODAL[e.kind]) {
         const m = MODAL[e.kind]; sfx(m[2]);
         await showModal({ kind: m[1], title: m[0], body: `<p>${e.text}</p>` });
@@ -286,7 +287,7 @@
   async function endScreen() {
     const nw = E.netWorth(G), s = G.stats;
     clearSave();
-    const stats = `<p class="mono dim" style="font-size:12px">Peak ${big(s.peak)} · ${s.sessions} sessions · ${s.trades} trades<br>Best session ${sgn(s.bestDay)} · fees paid ${money(s.fees)}</p>`;
+    const stats = `<p class="mono dim" style="font-size:12px">Peak ${big(s.peak)} · ${plural(s.sessions, 'session')} · ${plural(s.trades, 'trade')}<br>Best session ${sgn(s.bestDay)} · fees paid ${money(s.fees)}</p>`;
     if (G.over === 'homeless') {
       sfx('lose');
       await showModal({ kind: 'bad', title: '🥫 HOMELESS',

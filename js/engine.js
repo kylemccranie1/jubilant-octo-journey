@@ -114,7 +114,7 @@
     { id: 5, name: 'Ferrari Testarossa', emoji: '🔴', price: 190000, upkeep: 1500, desc: 'Side strakes. Miami Vice approved.', pk: { m: .84 }, perk: 'Margin −16%.' },
     { id: 6, name: 'Stretch Limo + Driver', emoji: '🛻', price: 400000, upkeep: 5000, desc: 'Moonroof for waving at peasants.', pk: { m: .8 }, perk: 'Margin −20%: you clearly have money.' },
   ];
-  // Floor gear: per-side clearing fee, how truthful the pit's shouting is (rel), and daily tips
+  // Floor gear: per-side clearing fee, how truthful the pit's shouting is (rel), and morning calls
   const TECH = [
     { id: 0, name: 'Rotary Phone & WSJ', emoji: '☎️', price: 0, upkeep: 0, fee: 2.5, rel: .55, tips: 0, desc: 'Standard clearing fees ($2.50/side). Pit chatter only 55% reliable.' },
     { id: 1, name: 'Motorola Brick Phone', emoji: '📱', price: 1500, upkeep: 50, fee: 2.0, rel: .62, tips: 1, desc: '$2.00/side. Chatter 62% reliable + 1 morning call.' },
@@ -135,7 +135,7 @@
   ];
 
   // Perks from homes, wheels and status symbols (gear is separate): s=life-shock cost, g=notice grace days, m=margin,
-  // b=customer-fill brokerage, o=customer-offer frequency, t=morning tips, r=chatter reliability, sec=compliance catch chance
+  // b=customer-fill brokerage, o=customer-offer frequency, t=morning calls, r=chatter reliability, sec=compliance catch chance
   function perksOf(G) {
     const out = { shock: 1, grace: 0, margin: 1, bonus: 1, offer: 1, tips: 0, rel: 0, sec: 1, whispers: 0, wacc: 0 };
     const parts = [HOMES[G.home].pk, CARS[G.car].pk]; for (const id of G.lux) parts.push(LUX.find((l) => l.id === id).pk);
@@ -498,49 +498,6 @@
     for (let i = S.prints.length - 1; i >= 0; i--) { const p = S.prints[i]; if (p[0] <= S.t - w) break; if (p[4] !== 'me' && p[4] !== 'mine') sum += p[1] * p[2]; }
     return sum;
   }
-  // The on-screen "lean call": computed ONLY from what the player can see (big crowd prints in the last ~25 steps)
-  const LEAN_WIN = 30, LEAN_T = [2, 4, 6.5], LEAN_PUR = 0.4, LEAN_MIN = 0.9; // thresholds are in units of one informed block (level depth x pit activity); LEAN_MIN = smallest print that counts // window (steps), strength thresholds (x level depth), purity, min print size (x depth)
-  function leanSignal(G, win) {
-    const S = G.sess; win = win || LEAN_WIN;
-    const out = { dir: 0, strength: 0, net: 0, bb: 0, bs: 0, lb: 0, ls: 0 };
-    if (!S) return out;
-    const D = dpth(S), U = D * CBY[S.sym].act; // U = size of a typical informed block
-    for (let i = S.prints.length - 1; i >= 0; i--) {
-      const p = S.prints[i]; if (p[0] <= S.t - win) break;
-      if (p[4] === 'me' || p[4] === 'mine' || p[2] < U * LEAN_MIN) continue;
-      out.net += p[1] * p[2];
-      if (p[1] > 0) { out.bb++; out.lb += p[2]; } else { out.bs++; out.ls += p[2]; }
-    }
-    const a = Math.abs(out.net) / U, vol = out.lb + out.ls, purity = vol ? Math.abs(out.net) / vol : 0;
-    let st = a >= LEAN_T[2] ? 3 : a >= LEAN_T[1] ? 2 : a >= LEAN_T[0] ? 1 : 0;
-    if (purity < LEAN_PUR) st = 0; // mixed buying and selling is chop, not a lean
-    out.strength = st; out.dir = st ? Math.sign(out.net) : 0;
-    return out;
-  }
-  // The call the UI shows: raw leanSignal with hysteresis so it doesn't flicker (strong calls are held a few seconds and fade, not vanish)
-  function updateLeanCall(S, G) {
-    const raw = leanSignal(G), c = S.call || (S.call = { dir: 0, strength: 0, hold: 0, fading: false });
-    if (raw.strength >= 1 && (c.strength === 0 || raw.dir === c.dir) && raw.strength >= c.strength) { c.dir = raw.dir; c.strength = raw.strength; c.hold = raw.strength >= 2 ? 14 : 6; c.fading = false; }
-    else if (raw.strength >= 1 && raw.dir !== c.dir && (c.strength <= 1 || raw.strength >= 2)) { c.dir = raw.dir; c.strength = raw.strength; c.hold = raw.strength >= 2 ? 14 : 6; c.fading = false; }
-    else if (c.strength > 0) { // underlying signal is weaker than what we show
-      if (c.hold > 0) c.hold--;
-      else { c.strength = Math.max(raw.strength, c.strength - 1); c.hold = 6; c.fading = c.strength > 0; if (c.strength === 0) c.dir = 0; }
-    }
-    return c;
-  }
-  const leanCall = (G) => (G.sess ? (G.sess.call || { dir: 0, strength: 0, fading: false }) : { dir: 0, strength: 0, fading: false });
-  // order-flow "delta" bars: net aggressive lots per bucket of `size` steps, oldest first (in units of level depth)
-  function deltaBars(G, buckets, size) {
-    const S = G.sess, out = new Array(buckets).fill(0);
-    if (!S) return out;
-    const D = dpth(S);
-    for (const p of S.prints) {
-      if (p[4] === 'me' || p[4] === 'mine') continue;
-      const age = S.t - p[0], b = Math.floor(age / size);
-      if (b >= 0 && b < buckets) out[buckets - 1 - b] += p[1] * p[2] / D;
-    }
-    return out;
-  }
   const flowGauge = (G) => (G.sess ? clamp(G.sess.flowEma * 5, -1, 1) : 0);
   const shoutsNow = (G, n) => { const S = G.sess; return S ? S.prints.slice(-n).reverse() : []; };
   function ladder(G, k) {
@@ -645,7 +602,6 @@
     if (S.rev) { S.rev.age++; if (--S.rev.left <= 0) S.rev = null; }
     ensureDepth(G, S, 5);
     S.path.push(midOf(S));
-    updateLeanCall(S, G);
 
     if (o && o.resolved === 'ahead' && t === o.jt + 8) settleFrontRun(G, events);
     if (G.pos) {
@@ -1069,7 +1025,7 @@
 
   const api = {
     START_CASH, SELL_RATIO, SAVE_VERSION, TAX_RATE, MAINT, N_STEPS, STEP_MS, CONTRACTS, CBY, HOMES, CARS, TECH, LUX, CLUBS, RANKS, ACH, ERA_EVENTS,
-    newGame, callGuy, perksOf, relOf, duelFromSeed, duelGame, duelPath, DUEL_CASH, startSession, stepSession, CAREER, RIVALS, marginOf, feeOf, liqPrice, rankings, inflation, trade, flatten, setStop, placeLimit, cancelOrders, preview, forceRegime, inject, respondOffer, skipDays, recentFlow, flowGauge, leanSignal, leanCall, deltaBars, shoutsNow, ladder, quote,
+    newGame, callGuy, perksOf, relOf, duelFromSeed, duelGame, duelPath, DUEL_CASH, startSession, stepSession, CAREER, RIVALS, marginOf, feeOf, liqPrice, rankings, inflation, trade, flatten, setStop, placeLimit, cancelOrders, preview, forceRegime, inject, respondOffer, skipDays, recentFlow, flowGauge,  shoutsNow, ladder, quote,
     buyItem, sellItem, moveHome, checkAchievements,
     netWorth, equity, unreal, maxLots, marginUsed, marginLevel, markT, monthlyCosts, monthlyIncome, rankOf, livingCost,
     dateOfDay, clockOf, fmtPrice, priceOf,

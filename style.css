@@ -147,7 +147,7 @@ button.big2{padding:10px 0;font-size:20px;min-height:54px}
 .chips button{min-height:42px}.row-btns button{min-height:42px}
 #pGauge{font-size:11px}.sh small{font-size:11px}
 #pPos div:last-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-@media (max-height:700px){#pShouts{max-height:70px}#pShouts .sh:nth-child(n+4){display:none}.lv{height:13px}.pit-pos{padding:5px 8px}button.big2{min-height:48px;padding:6px 0}.chips button,.row-btns button{min-height:38px}}
+@media (max-height:700px){#pShouts{max-height:70px;min-height:0}#pShouts .sh:nth-child(n+4){display:none}.lv{height:13px}.pit-pos{padding:5px 8px}button.big2{min-height:48px;padding:6px 0}.chips button,.row-btns button{min-height:38px}}
 
 /* ---- 90s trading-floor look ---- */
 #pScene,#titleScene{width:100%;height:84px;image-rendering:pixelated;image-rendering:crisp-edges;border-radius:8px;border:1px solid var(--line);background:#0b1022;display:block}
@@ -199,3 +199,19 @@ button.big2{padding:10px 0;font-size:20px;min-height:54px}
 .duel-t{width:100%;border-collapse:collapse;font-size:13px}.duel-t th{font-weight:600;color:var(--dim);text-align:right;font-size:11px;padding:2px 4px}.duel-t th:first-child,.duel-t td:first-child{text-align:left}.duel-t td{padding:4px;text-align:right;border-top:1px solid var(--line)}.duel-t tr.win td:first-child{color:var(--amber);font-weight:800}.duel-t tr.win td:first-child::before{content:'🏆 '}
 
 .perk{font-size:11px;color:var(--dim);margin-top:2px}.perk.on{color:var(--amber);font-weight:700}
+
+/* ---- small-phone fit (iPhone SE in Safari is ~375x548) ---- */
+#pit{overflow-y:auto}
+.pit-price{flex-wrap:nowrap}
+@media (max-width:380px){#pBA{display:none}}
+@media (max-height:620px){
+  #pit{gap:4px;padding-top:calc(4px + var(--sat))}
+  #pScene{height:40px}#pLast{font-size:24px}
+  #pChartWrap.crt{min-height:70px}
+  .lv{height:11px;font-size:10px}#pShouts{max-height:46px;min-height:0}#pShouts .sh:nth-child(n+3){display:none}
+  .pit-pos{padding:3px 8px;font-size:11px}
+  .pit-btns button{min-height:36px}
+  .chips button,.row-btns button{min-height:32px}
+  button.big2{min-height:42px;font-size:17px}
+}
+@media (max-height:660px) and (min-height:621px){#pScene{height:52px}}
