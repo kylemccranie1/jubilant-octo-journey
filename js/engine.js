@@ -124,14 +124,26 @@
     { id: 5, name: 'Private Trading Floor', emoji: '🏛️', price: 350000, upkeep: 5000, fee: .35, rel: .90, tips: 3, desc: '$0.35/side. Chatter 90% reliable + 3 tips.' },
   ];
 
+  // Social clubs: a join fee (never refunded) plus monthly dues, gated by career rank. Members hear whispers about
+  // headlines before they hit (w = whispers a day, wa = how often they're right), and get better customer flow.
+  const CLUBS = [
+    { id: 'gym', name: 'Gold Coast Health Club', emoji: '🏋️', price: 1500, upkeep: 120, lvl: 0, desc: 'Steam room gossip from guys who work at the Merc.', pk: { t: 1 }, perk: '+1 morning tip.' },
+    { id: 'rotary', name: 'Rotary Lunch Club', emoji: '🥪', price: 4000, upkeep: 200, lvl: 0, desc: 'Chicken salad, handshakes and grain customers.', pk: { o: 1.3 }, perk: 'Customer order offers 30% more often.' },
+    { id: 'union', name: 'Union League Club', emoji: '🎩', price: 15000, upkeep: 500, lvl: 1, desc: 'Oak paneling. Bankers talk when the door is closed.', pk: { w: 1, wa: .7 }, perk: 'Hear a whisper when a headline is brewing (~70% right), or that it\'s quiet.' },
+    { id: 'country', name: 'Old Elm Country Club', emoji: '⛳', price: 60000, upkeep: 1800, lvl: 2, desc: 'Eighteen holes. Four hundred conflicts of interest.', pk: { w: 1, wa: .78, o: 1.5, b: 1.15 }, perk: 'Whisper (~78% right), offers +50% often, customer fills +15%.' },
+    { id: 'chicagoclub', name: 'The Chicago Club', emoji: '🥃', price: 250000, upkeep: 6000, lvl: 3, desc: 'Members only. The kind of room where deals are decided.', pk: { w: 2, wa: .86, t: 1 }, perk: 'Up to two headline whispers (~86% right), +1 tip.' },
+  ];
+
   // Perks from homes, wheels and status symbols (gear is separate): s=life-shock cost, g=notice grace days, m=margin,
   // b=customer-fill brokerage, o=customer-offer frequency, t=morning tips, r=chatter reliability, sec=compliance catch chance
   function perksOf(G) {
-    const out = { shock: 1, grace: 0, margin: 1, bonus: 1, offer: 1, tips: 0, rel: 0, sec: 1 };
+    const out = { shock: 1, grace: 0, margin: 1, bonus: 1, offer: 1, tips: 0, rel: 0, sec: 1, whispers: 0, wacc: 0 };
     const parts = [HOMES[G.home].pk, CARS[G.car].pk]; for (const id of G.lux) parts.push(LUX.find((l) => l.id === id).pk);
+    for (const id of (G.clubs || [])) parts.push(CLUBS.find((c) => c.id === id).pk);
     for (const p of parts) if (p) {
       out.shock *= p.s || 1; out.grace += p.g || 0; out.margin *= p.m || 1; out.bonus *= p.b || 1;
       out.offer *= p.o || 1; out.tips += p.t || 0; out.rel += p.r || 0; out.sec *= p.sec || 1;
+      out.whispers += p.w || 0; out.wacc = Math.max(out.wacc, p.wa || 0);
     }
     return out;
   }
@@ -194,7 +206,7 @@
     const G = {
       v: SAVE_VERSION, rs: (seed == null ? (Math.random() * 2 ** 31) | 0 : seed) | 0,
       day: 0, cash: START_CASH, pos: null, mk: {}, today: null, sess: null, tips: [],
-      home: 0, car: 0, tech: 0, lux: [], billMonth: monthIdxOfDay(0),
+      home: 0, car: 0, tech: 0, lux: [], clubs: [], billMonth: monthIdxOfDay(0),
       ytd: 0, taxDue: 0, heat: 0, fined: false, sec: null, lastOffer: -99, flags: {}, ach: {},
       level: 0, career: { low: 0 }, notice: null, rank: 0, rivals: RIVALS.map((r) => ({ id: r.id, nw: r.nw0, broke: 0 })),
       yr: { year: 1990, nw0: START_CASH, sessions: 0, best: 0, worst: 0 },
@@ -239,10 +251,18 @@
 
   function makeTips(G) {
     G.tips = [];
-    const tier = TECH[G.tech];
+    const tier = TECH[G.tech], P = perksOf(G);
     const syms = CONTRACTS.filter((c) => G.unlocked[c.sym]).map((c) => c.sym);
     const used = new Set();
-    for (let i = 0; i < tier.tips + perksOf(G).tips && syms.length; i++) {
+    // club whispers: a headline is coming in this pit, and the member hears which way it will break (sometimes wrongly)
+    const newsy = syms.filter((x) => G.today.per[x].text && G.today.per[x].shock);
+    if (P.whispers && !newsy.length) G.tips.push({ sym: null, up: null, whisper: true, text: '🥃 The club is quiet today: no headlines brewing in your pits.' });
+    for (let i = 0; i < P.whispers && newsy.length; i++) {
+      const sym = pick(G, newsy.filter((x) => !used.has(x)) .length ? newsy.filter((x) => !used.has(x)) : newsy); if (used.has(sym)) break; used.add(sym);
+      const truth = G.today.per[sym].shock > 0, up = rnd(G) < P.wacc ? truth : !truth;
+      G.tips.push({ sym, up, whisper: true, text: `🥃 A whisper at the club: news is brewing in ${CBY[sym].name}, and it sounds ${up ? 'BULLISH 📈' : 'BEARISH 📉'}.` });
+    }
+    for (let i = 0; i < tier.tips + P.tips && syms.length; i++) {
       const sym = pick(G, syms); if (used.has(sym)) continue; used.add(sym);
       const per = G.today.per[sym], truth = per.closeT >= per.openT;
       const up = rnd(G) < relOf(G) ? truth : !truth;
@@ -763,7 +783,7 @@
   // ---------------------------------------------------------------- money
   const livingCost = (G) => 150 + 100 * G.home;
   function monthlyCosts(G) {
-    const lux = G.lux.reduce((a, id) => a + LUX.find((l) => l.id === id).upkeep, 0);
+    const lux = G.lux.reduce((a, id) => a + LUX.find((l) => l.id === id).upkeep, 0) + (G.clubs || []).reduce((a, id) => a + CLUBS.find((c) => c.id === id).upkeep, 0);
     return Math.round((HOMES[G.home].rent + livingCost(G) + CAREER[G.level || 0].dues) * inflation(G)) + CARS[G.car].upkeep + TECH[G.tech].upkeep + lux;
   }
   const inflation = (G) => 1 + 0.03 * (dateOfDay(G.day).getUTCFullYear() - 1990); // rent, living costs and dues creep up 3%/yr; your diner wage doesn't
@@ -777,7 +797,8 @@
   function liquidateFor(G, needFn, msgs) {
     let guard = 40;
     while (G.cash < needFn() && guard--) {
-      if (G.lux.length) {
+      if ((G.clubs || []).length) { const c = CLUBS.find((x) => x.id === G.clubs[0]); G.clubs.shift(); msgs.push(`Membership at ${c.name} lapsed`); }
+      else if (G.lux.length) {
         const id = G.lux.slice().sort((a, b) => LUX.find((l) => l.id === b).price - LUX.find((l) => l.id === a).price)[0];
         sellItem(G, 'lux', id, true); msgs.push(`Repo: ${LUX.find((l) => l.id === id).name} sold`);
       } else if (G.car > 0) { G.cash += SELL_RATIO * CARS[G.car].price; msgs.push(`Repo: ${CARS[G.car].name} sold`); G.car = 0; }
@@ -993,6 +1014,15 @@
   }
   function buyItem(G, cat, id) {
     if (cat === 'home') return moveHome(G, id);
+    if (cat === 'club') {
+      const c = CLUBS.find((x) => x.id === id); if (!G.clubs) G.clubs = [];
+      if (G.clubs.includes(id)) return { ok: false, msg: 'Already a member.' };
+      if ((G.level || 0) < c.lvl) return { ok: false, msg: `Members only: you need the ${CAREER[c.lvl].title} badge.` };
+      if (G.cash - c.price < marginUsed(G)) return { ok: false, msg: 'Not enough cash for the initiation fee.' };
+      G.cash -= c.price; G.clubs.push(id);
+      addNews(G, 'life', `You joined ${c.name}.`);
+      return { ok: true, msg: `Welcome to ${c.name}` };
+    }
     if (cat === 'lux') {
       const it = LUX.find((l) => l.id === id);
       if (G.lux.includes(id)) return { ok: false, msg: 'Already owned.' };
@@ -1010,6 +1040,7 @@
     return { ok: true, msg: `Upgraded to ${it.name}` };
   }
   function sellItem(G, cat, id, quiet) {
+    if (cat === 'club') { const i = (G.clubs || []).indexOf(id); if (i < 0) return { ok: false, msg: 'Not a member.' }; G.clubs.splice(i, 1); return { ok: true, msg: 'You resigned. The initiation fee is not refunded.' }; }
     if (cat === 'lux') {
       const i = G.lux.indexOf(id); if (i < 0) return { ok: false, msg: 'Not owned.' };
       G.cash += SELL_RATIO * LUX.find((l) => l.id === id).price; G.lux.splice(i, 1);
@@ -1022,7 +1053,7 @@
   }
 
   const api = {
-    START_CASH, SELL_RATIO, SAVE_VERSION, TAX_RATE, MAINT, N_STEPS, STEP_MS, CONTRACTS, CBY, HOMES, CARS, TECH, LUX, RANKS, ACH, ERA_EVENTS,
+    START_CASH, SELL_RATIO, SAVE_VERSION, TAX_RATE, MAINT, N_STEPS, STEP_MS, CONTRACTS, CBY, HOMES, CARS, TECH, LUX, CLUBS, RANKS, ACH, ERA_EVENTS,
     newGame, perksOf, relOf, duelFromSeed, duelGame, duelPath, DUEL_CASH, startSession, stepSession, CAREER, RIVALS, marginOf, feeOf, liqPrice, rankings, inflation, trade, flatten, setStop, placeLimit, cancelOrders, preview, forceRegime, inject, respondOffer, skipDays, recentFlow, flowGauge, leanSignal, leanCall, deltaBars, shoutsNow, ladder, quote,
     buyItem, sellItem, moveHome, checkAchievements,
     netWorth, equity, unreal, maxLots, marginUsed, marginLevel, markT, monthlyCosts, monthlyIncome, rankOf, livingCost,

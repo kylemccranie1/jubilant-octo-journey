@@ -155,6 +155,10 @@
       meta = `Rent ${money(it.rent)}/mo`;
       if (state === 'cur') btn = '<span class="tag">LIVING HERE</span>';
       else btn = `<button class="${it.id > G.home ? 'primary' : ''}" data-buy="home:${it.id}">${it.id > G.home ? 'Move in<br><small>' + money(it.rent * 2) + ' deposit</small>' : 'Downsize'}</button>`;
+    } else if (cat === 'club') {
+      const mem = (G.clubs || []).includes(it.id), ok = (G.level || 0) >= it.lvl;
+      meta = `Join ${money(it.price)} · dues ${money(it.upkeep)}/mo${it.lvl ? ' · ' + E.CAREER[it.lvl].title + '+' : ''}`;
+      btn = mem ? `<button data-sell="club:${it.id}">Resign</button>` : (ok ? `<button class="primary" data-buy="club:${it.id}">Join</button>` : `<span class="tag">${E.CAREER[it.lvl].title}+</span>`);
     } else if (cat === 'lux') {
       meta = `${money(it.price)}${it.upkeep ? ' · ' + money(it.upkeep) + '/mo upkeep' : ''}`;
       btn = G.lux.includes(it.id) ? `<button data-sell="lux:${it.id}">Sell<br><small>${money(it.price * E.SELL_RATIO)}</small></button>` : `<button class="primary" data-buy="lux:${it.id}">Buy</button>`;
@@ -164,7 +168,7 @@
       if (state === 'cur') btn = it.price ? `<button data-sell="${cat}:0">Sell<br><small>${money(it.price * E.SELL_RATIO)}</small></button>` : '<span class="tag">CURRENT</span>';
       else if (it.id > G[cat]) btn = `<button class="primary" data-buy="${cat}:${it.id}">Upgrade<br><small>${money(it.price - E.SELL_RATIO * list[G[cat]].price)}</small></button>`;
     }
-    const owned = state === 'cur' || (cat === 'lux' && G.lux.includes(it.id));
+    const owned = state === 'cur' || (cat === 'lux' && G.lux.includes(it.id)) || (cat === 'club' && (G.clubs || []).includes(it.id));
     return `<div class="card item row ${owned ? 'cur' : ''}"><div class="emoji">${it.emoji}</div>
       <div class="grow"><div class="title">${it.name}</div><div class="desc">${it.desc}</div>${it.perk && cat !== 'tech' ? `<div class="perk ${owned ? 'on' : ''}">✨ ${it.perk}</div>` : ''}<div class="meta">${meta}</div></div>${btn}</div>`;
   }
@@ -180,11 +184,13 @@
     if (P.rel) pl.push(`Chatter +${Math.round(P.rel * 100)}%`);
     if (P.bonus > 1) pl.push(`Customer fills +${Math.round((P.bonus - 1) * 100)}%`);
     if (P.offer > 1) pl.push(`Offers +${Math.round((P.offer - 1) * 100)}% often`);
+    if (P.whispers) pl.push(`${P.whispers} headline whisper${P.whispers > 1 ? 's' : ''} (${Math.round(P.wacc * 100)}% right)`);
     if (P.sec < 1) pl.push(`Compliance catch −${Math.round((1 - P.sec) * 100)}%`);
-    html += `<div class="card" style="font-size:12px;margin-top:6px">✨ <b>Active perks</b> (home, wheels, status symbols): ${pl.length ? pl.join(' · ') : '<span class="dim">none yet. Buy something nice.</span>'}</div>`;
+    html += `<div class="card" style="font-size:12px;margin-top:6px">✨ <b>Active perks</b> (home, wheels, clubs, status symbols): ${pl.length ? pl.join(' · ') : '<span class="dim">none yet. Buy something nice.</span>'}</div>`;
     html += '<h2>🏠 Home</h2>' + E.HOMES.map((h) => lifeCard('home', h, h.id === G.home ? 'cur' : 'buy')).join('');
     html += '<h2>🚗 Wheels</h2>' + E.CARS.map((c) => lifeCard('car', c, c.id === G.car ? 'cur' : 'buy')).join('');
     html += '<h2>📟 Floor gear</h2>' + E.TECH.map((c) => lifeCard('tech', c, c.id === G.tech ? 'cur' : 'buy')).join('');
+    html += '<h2>🍸 Social clubs</h2><div class="dim" style="font-size:11px;margin:-4px 2px 6px">Join fees are never refunded and dues keep coming. Fall behind on bills and your memberships lapse first.</div>' + E.CLUBS.map((c) => lifeCard('club', c, 'buy')).join('');
     html += '<h2>💎 Status symbols</h2>' + E.LUX.map((c) => lifeCard('lux', c, 'buy')).join('');
     return html;
   }
@@ -865,7 +871,7 @@
     if (t.dataset.tb != null && tut) { const i = +t.dataset.tb; const r = tut.resolveCard; tut.resolveCard = null; if (r) r(i); return; }
     if (t.dataset.buy || t.dataset.sell) {
       const [cat, id] = (t.dataset.buy || t.dataset.sell).split(':');
-      const key = cat === 'lux' ? id : +id;
+      const key = (cat === 'lux' || cat === 'club') ? id : +id;
       const r = t.dataset.buy ? E.buyItem(G, cat, key) : E.sellItem(G, cat, key);
       toast(r.msg); sfx(r.ok ? 'buy' : 'error'); if (r.ok) { buzz(20); noteAch(E.checkAchievements(G)); save(); } render(); return;
     }

@@ -246,4 +246,16 @@ function fresh(seed, sym = 'SOY') { const G = E.newGame(seed); G.unlocked[sym] =
   assert(tips >= 3, 'perk tips show up in the morning');
   G.lux = []; G.home = 0; assert(E.perksOf(G).tips === 0, 'perks vanish with the items');
 }
+{ // social clubs
+  const G = E.newGame(61); G.cash = 5e5;
+  assert(E.buyItem(G, 'club', 'union').ok === false, 'rank gate');
+  G.level = 1; const c0 = E.monthlyCosts(G), nw0 = E.netWorth(G); assert(E.buyItem(G, 'club', 'union').ok && E.perksOf(G).whispers === 1, 'join');
+  assert(E.monthlyCosts(G) === c0 + 500 && E.netWorth(G) <= nw0 - 15000 + 1, 'dues charged, fee not an asset');
+  assert(E.buyItem(G, 'club', 'union').ok === false, 'no double join');
+  let w = 0, ok = 0, n = 0; for (const c of E.CONTRACTS) G.unlocked[c.sym] = true;
+  for (let d = 0; d < 300 && !G.over; d++) { for (const t of G.tips) if (t.whisper && t.sym) { n++; if ((G.today.per[t.sym].shock > 0) === t.up) ok++; } E.skipDays(G, 1); G.cash = Math.max(G.cash, 5e5); }
+  assert(n > 20 && ok / n > 0.55 && ok / n < 0.9, 'whispers are right most, not all, of the time: ' + ok + '/' + n);
+  G.cash = 100; G.clubs = ['union', 'gym']; const msgs = []; // repo drops memberships first
+  const need = () => 10000; G.cash = 100; E.sellItem(G, 'club', 'gym'); assert(G.clubs.length === 1 && E.sellItem(G, 'club', 'union').ok && G.clubs.length === 0 && G.cash === 100, 'resign refunds nothing');
+}
 console.log('OK');
